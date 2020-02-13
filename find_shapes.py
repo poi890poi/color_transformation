@@ -3,6 +3,7 @@ import imutils
 
 
 PATH_IN = './images/20200213_103455.jpg'
+PATH_IN = './images/20200213_103542.jpg'
 WIDTH_OUT = 640
 
 class ShapeDetector:
@@ -45,7 +46,6 @@ resized = imutils.resize(image, width=WIDTH_OUT)
 src_width, src_height, src_channels = image.shape
 dst_width, dst_height, *_ = resized.shape
 ratio = src_width / float(dst_width)
-print(ratio)
 cv2.imshow('Source', resized)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
@@ -54,18 +54,33 @@ cv2.destroyAllWindows()
 # and threshold it
 lab = cv2.cvtColor(resized, cv2.COLOR_BGR2LAB)
 gray, a, b = cv2.split(lab)
-blurred = cv2.GaussianBlur(gray, (9, 9), 0)
-thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY, 11, 2)
-cv2.imshow('Binary', thresh)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
 
-# find contours in the thresholded image and initialize the
-# shape detector
-contours = cv2.findContours(thresh.copy(), cv2.RETR_LIST,
-    cv2.CHAIN_APPROX_TC89_KCOS)
-contours = imutils.grab_contours(contours)
+# Use different thresholding to get contours to deal with the problem
+# that different patches have different contrast.
+CASCADES = [
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 2),
+    (cv2.ADAPTIVE_THRESH_MEAN_C, 11, 2),
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 7, 2),
+    (cv2.ADAPTIVE_THRESH_MEAN_C, 7, 2),
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 4),
+    (cv2.ADAPTIVE_THRESH_MEAN_C, 11, 4),
+]
+contours = list()
+for c in CASCADES:
+    method, blockSize, C, *_ = c
+    blurred = cv2.GaussianBlur(gray, (9, 9), 0)
+    thresh = cv2.adaptiveThreshold(blurred, 255, method,
+                cv2.THRESH_BINARY, blockSize, C)
+    #cv2.imshow('Binary', thresh)
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
+
+    # find contours in the thresholded image and initialize the
+    # shape detector
+    clist = cv2.findContours(thresh.copy(), cv2.RETR_LIST,
+        cv2.CHAIN_APPROX_TC89_KCOS)
+    clist = imutils.grab_contours(clist)
+    contours += clist
 #cv2.drawContours(resized, contours, -1, (0, 255, 0), 3)
 #cv2.imshow('Contours', resized)
 #cv2.waitKey(0)
@@ -92,8 +107,8 @@ for c in contours:
     area = w * h / float(src_width) / float(src_height)
     if area < 0.001: continue
     cv2.drawContours(image, [c], -1, (0, 255, 0), 2)
-    cv2.putText(image, shape, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX,
-        0.5, (255, 255, 255), 2)
+    #cv2.putText(image, shape, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX,
+    #    0.5, (255, 255, 255), 2)
     # show the output image
     cv2.imshow("Image", image)
 
