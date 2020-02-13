@@ -1,3 +1,4 @@
+import numpy as np
 import cv2
 import imutils
 
@@ -64,6 +65,8 @@ CASCADES = [
     (cv2.ADAPTIVE_THRESH_MEAN_C, 7, 2),
     (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 4),
     (cv2.ADAPTIVE_THRESH_MEAN_C, 11, 4),
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 17, 2),
+    (cv2.ADAPTIVE_THRESH_MEAN_C, 17, 2),
 ]
 contours = list()
 for c in CASCADES:
@@ -88,6 +91,8 @@ for c in CASCADES:
 
 sd = ShapeDetector()
 
+plist = list() # List of the bounding box of the color patch
+
 # loop over the contours
 for c in contours:
     # compute the center of the contour, then detect the name of the
@@ -104,12 +109,40 @@ for c in contours:
     c = c.astype("int")
     if shape != 'square': continue
     x, y, w, h = bounding
-    area = w * h / float(src_width) / float(src_height)
-    if area < 0.001: continue
-    cv2.drawContours(image, [c], -1, (0, 255, 0), 2)
+    area = w * h / float(dst_width) / float(dst_height)
+    if area < 0.005 or area > 0.025: continue
+    plist.append(bounding)
+    #cv2.drawContours(image, [c], -1, (0, 255, 0), 2)
     #cv2.putText(image, shape, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX,
     #    0.5, (255, 255, 255), 2)
     # show the output image
-    cv2.imshow("Image", image)
+    #cv2.imshow("Image", image)
+
+def rectIoU(bbox1, bbox2):
+    x1, y1, w1, h1 = bbox1
+    x2, y2, w2, h2 = bbox2
+    x = max(x1, x2)
+    y = max(y1, y2)
+    w = min(x1 + w1, x2 + w2) - x
+    if w <= 0: return 0
+    h = min(y1 + h1, y2 + h2) - y
+    if h <= 0: return 0
+    iou = w * h / float(w1 * h1 + w2 * h2 - w * h)
+    return iou
+
+for i in range(len(plist)):
+    for j in range(i+1, len(plist)):
+        iou = rectIoU(plist[i], plist[j])
+        if iou > 0.6:
+            plist[i] = (0, 0, 0, 0)
+for p in plist:
+    if p is not (0, 0, 0, 0):
+        bbox = np.array(p, dtype=np.float) * ratio
+        print(bbox.astype(np.uint))
+        pt1 = tuple(bbox[:2].astype(np.uint))
+        pt2 = tuple((pt1 + bbox[-2:]).astype(np.uint))
+        print(pt1, pt2)
+        cv2.rectangle(image, pt1, pt2, (0, 255, 0), 2)
+cv2.imshow("Image", image)
 
 cv2.waitKey(0)
