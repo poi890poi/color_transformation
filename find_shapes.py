@@ -201,6 +201,11 @@ plist = new_list
 del new_list
 pprint(plist)
 
+# Use contours 18 cyan and 23 neutral to find contour 24 black
+plist.append((plist[17][0], plist[22][1], 
+    int((plist[17][2] + plist[22][2]) / 2), 
+    int((plist[17][3] + plist[22][3]) / 2)))
+
 # Convert to target color space
 if COLOR_SPACE == 'xyz':
     cie = cv2.cvtColor(image, cv2.COLOR_BGR2XYZ)
@@ -261,7 +266,7 @@ for p in plist:
             z = np.average(lab_l[r[0]:r[1], r[2]:r[3]]) * 100 / 255
         else:
             raise ValueError('Unknown color space')
-        cvalues = '%d, %.2f, %.2f' % (z, x, y)
+        cvalues = '%.2f, %.2f' % (x, y)
         #nearest, d = nearestColor((z, x, y))
         index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
         d = colorDistance(ref_color, (z, x, y))
@@ -278,12 +283,13 @@ for p in plist:
         cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
             1, (255, 255, 0), 1)
         # Print distance
-        distance = '%.4f' % (d,)
+        distance = 'd=%.4f' % (d,)
         pt1 = tuple((bbox[:2] + [padding, padding + 32]).astype(np.uint))
         cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
             1, (255, 255, 0), 1)
 
         ref_color_index += 1
 
+cv2.imwrite('./images/output.jpg', image)
 cv2.imshow("Image", image)
 cv2.waitKey(0)
