@@ -9,8 +9,8 @@ import imutils
 from scipy.optimize import minimize, least_squares
 
 PATH_IN = './images/20200213_103455.jpg'
-PATH_IN = './images/20200213_103542.jpg'
-#PATH_IN = './images/color_checker.jpg'
+#PATH_IN = './images/20200213_103542.jpg'
+PATH_IN = './images/color_checker.jpg'
 WIDTH_OUT = 640
 
 COLOR_SPACE = 'lab'
@@ -153,8 +153,9 @@ for c in contours:
     #cv2.drawContours(image, [c], -1, (0, 255, 0), 2)
     #cv2.putText(image, shape, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX,
     #    0.5, (255, 255, 255), 2)
-    # show the output image
-    #cv2.imshow("Image", image)
+# show the output image
+#cv2.imshow("Image", image)
+#cv2.waitKey(0)
 
 def rect_iou(bbox1, bbox2):
     '''
@@ -201,9 +202,10 @@ del new_list
 pprint(plist)
 
 # Use contours 18 cyan and 23 neutral to find contour 24 black
-plist.append((plist[17][0], plist[22][1], 
-    int((plist[17][2] + plist[22][2]) / 2), 
-    int((plist[17][3] + plist[22][3]) / 2)))
+if len(plist) < 24:
+    plist.append((plist[17][0], plist[22][1], 
+        int((plist[17][2] + plist[22][2]) / 2), 
+        int((plist[17][3] + plist[22][3]) / 2)))
 
 # Convert to target color space
 if COLOR_SPACE == 'xyz':
@@ -243,54 +245,53 @@ samples = np.ndarray(shape=(24, 3), dtype=np.float)
 ref_color_index = 0
 padding = 18
 for p in plist:
-    if p is not (0, 0, 0, 0):
-        bbox = np.array(p, dtype=np.float) * ratio
-        x, y, w, h = bbox.astype(np.uint)
-        r = (int(y+padding), int(y+h-padding*2-1), 
-            int(x+padding), int(x+w-padding*2-1))
-        if r[0] >= r[1] or r[2] >= r[3]:
-            r = (int(y), int(y+h-1), 
-                int(x), int(x+w-1))
-        ''' # Use histogram instead of mean to calculate the XY values
-        hist, xbins, ybins = np.histogram2d(
-            cie_x[r[0]:r[1], r[2]:r[3]].ravel(),
-            cie_y[r[0]:r[1], r[2]:r[3]].ravel(), [256, 256])
-        major = np.unravel_index(np.argmax(hist, axis=None), hist.shape)'''
+    bbox = np.array(p, dtype=np.float) * ratio
+    x, y, w, h = bbox.astype(np.uint)
+    r = (int(y+padding), int(y+h-padding*2-1), 
+        int(x+padding), int(x+w-padding*2-1))
+    if r[0] >= r[1] or r[2] >= r[3]:
+        r = (int(y), int(y+h-1), 
+            int(x), int(x+w-1))
+    ''' # Use histogram instead of mean to calculate the XY values
+    hist, xbins, ybins = np.histogram2d(
+        cie_x[r[0]:r[1], r[2]:r[3]].ravel(),
+        cie_y[r[0]:r[1], r[2]:r[3]].ravel(), [256, 256])
+    major = np.unravel_index(np.argmax(hist, axis=None), hist.shape)'''
 
-        if COLOR_SPACE == 'xyz':
-            x = np.average(cie_x[r[0]:r[1], r[2]:r[3]]) / 255
-            y = np.average(cie_y[r[0]:r[1], r[2]:r[3]]) / 255
-        elif COLOR_SPACE == 'lab':
-            x = np.average(lab_a[r[0]:r[1], r[2]:r[3]]) - 128
-            y = np.average(lab_b[r[0]:r[1], r[2]:r[3]]) - 128
-            z = np.average(lab_l[r[0]:r[1], r[2]:r[3]]) * 100 / 255
-        else:
-            raise ValueError('Unknown color space')
-        cvalues = '%.2f, %.2f' % (x, y)
-        samples[ref_color_index] = (z, x, y)
-        print(ref_color_index, (z, x, y), samples[ref_color_index])
-        #nearest, d = nearest_color((z, x, y))
-        index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
-        d = color_distance(ref_color, (z, x, y))
-        #print(x, y, cvalues)
-        #print()
-        # Print color values
-        pt1 = tuple((bbox[:2] + [padding, padding]).astype(np.uint))
-        pt2 = tuple((pt1 + bbox[-2:] - [padding*2-1, padding*2-1]).astype(np.uint))
-        cv2.rectangle(image, pt1, pt2, (0, 255, 0), 2)
-        cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
-            1, (255, 255, 0), 1)
-        # Print ref color
-        pt1 = tuple((bbox[:2] + [padding, padding + 16]).astype(np.uint))
-        cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
-            1, (255, 255, 0), 1)
-        # Print distance
-        distance = 'd=%.4f' % (d,)
-        pt1 = tuple((bbox[:2] + [padding, padding + 32]).astype(np.uint))
-        cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
-            1, (255, 255, 0), 1)
+    if COLOR_SPACE == 'xyz':
+        x = np.average(cie_x[r[0]:r[1], r[2]:r[3]]) / 255
+        y = np.average(cie_y[r[0]:r[1], r[2]:r[3]]) / 255
+    elif COLOR_SPACE == 'lab':
+        x = np.average(lab_a[r[0]:r[1], r[2]:r[3]]) - 128
+        y = np.average(lab_b[r[0]:r[1], r[2]:r[3]]) - 128
+        z = np.average(lab_l[r[0]:r[1], r[2]:r[3]]) * 100 / 255
+    else:
+        raise ValueError('Unknown color space')
+    cvalues = '%.2f, %.2f' % (x, y)
+    samples[ref_color_index] = (z, x, y)
+    print(ref_color_index, (z, x, y), samples[ref_color_index])
+    #nearest, d = nearest_color((z, x, y))
+    index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
+    d = color_distance(ref_color, (z, x, y))
+    #print(x, y, cvalues)
+    #print()
+    # Print color values
+    pt1 = tuple((bbox[:2] + [padding, padding]).astype(np.uint))
+    pt2 = tuple((pt1 + bbox[-2:] - [padding*2-1, padding*2-1]).astype(np.uint))
+    cv2.rectangle(image, pt1, pt2, (0, 255, 0), 2)
+    cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
+        1, (255, 255, 0), 1)
+    # Print ref color
+    pt1 = tuple((bbox[:2] + [padding, padding + 16]).astype(np.uint))
+    cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
+        1, (255, 255, 0), 1)
+    # Print distance
+    distance = 'd=%.4f' % (d,)
+    pt1 = tuple((bbox[:2] + [padding, padding + 32]).astype(np.uint))
+    cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
+        1, (255, 255, 0), 1)
 
-        ref_color_index += 1
+    ref_color_index += 1
 
 def color_transform(tmatrix, colors_train, colors_target):
     colors_train = colors_train.reshape((24, 3))
