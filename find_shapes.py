@@ -6,7 +6,7 @@ from pprint import pprint
 import numpy as np
 import cv2
 import imutils
-
+from scipy.optimize import minimize, least_squares
 
 PATH_IN = './images/20200213_103455.jpg'
 PATH_IN = './images/20200213_103542.jpg'
@@ -42,7 +42,6 @@ REF_POINTS = {
         (24, 'black (1.50*)', 20.461, -0.079, -0.973),
     ],
 }
-
 
 class ShapeDetector:
     def __init__(self):
@@ -157,7 +156,7 @@ for c in contours:
     # show the output image
     #cv2.imshow("Image", image)
 
-def rectIoU(bbox1, bbox2):
+def rect_iou(bbox1, bbox2):
     '''
     Calculate intersection-over-union of 2 rectangles supplied in the format 
     of (x, y, w, h).
@@ -176,7 +175,7 @@ def rectIoU(bbox1, bbox2):
 # Merge overlapped contours
 for i in range(len(plist)):
     for j in range(i+1, len(plist)):
-        iou = rectIoU(plist[i], plist[j])
+        iou = rect_iou(plist[i], plist[j])
         if iou > 0.6:
             plist[i] = (0, 0, 0, 0)
 new_list = list()
@@ -216,7 +215,7 @@ elif COLOR_SPACE == 'lab':
 else:
     raise ValueError('Unknown color space')
 
-def colorDistance(color_a, color_b):
+def color_distance(color_a, color_b):
     ref_l, ref_a, ref_b = color_a
     l, a, b = color_b
     delta_l = (ref_l - l) ** 2
@@ -225,7 +224,7 @@ def colorDistance(color_a, color_b):
     d = math.sqrt(delta_l + delta_a + delta_b)
     return d
 
-def nearestColor(sample):
+def nearest_color(sample):
     d_min = sys.float_info.max
     for ref in REF_POINTS['lab']:
         index, name, ref_l, ref_a, ref_b = ref
@@ -240,6 +239,7 @@ def nearestColor(sample):
             nearest = ref
     return nearest, d
 
+samples = np.ndarray(shape=(24, 3), dtype=np.float)
 ref_color_index = 0
 padding = 18
 for p in plist:
@@ -267,9 +267,11 @@ for p in plist:
         else:
             raise ValueError('Unknown color space')
         cvalues = '%.2f, %.2f' % (x, y)
-        #nearest, d = nearestColor((z, x, y))
+        samples[ref_color_index] = (z, x, y)
+        print(ref_color_index, (z, x, y), samples[ref_color_index])
+        #nearest, d = nearest_color((z, x, y))
         index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
-        d = colorDistance(ref_color, (z, x, y))
+        d = color_distance(ref_color, (z, x, y))
         #print(x, y, cvalues)
         #print()
         # Print color values
@@ -290,6 +292,44 @@ for p in plist:
 
         ref_color_index += 1
 
+def color_transform(tmatrix, colors_train, colors_target):
+    colors_train = colors_train.reshape((24, 3))
+    #matrices = matrices.reshape((24, 3, 3))
+    tmatrix = tmatrix.reshape((3, 3))
+    # einsum subscriptor for N vectors dot N matrices 'ij,ikj->ik'
+    transformed = np.einsum('ij,kj->ik', colors_train, tmatrix)
+    #diff = transformed.flatten() - REF_MATRICES['lab'].flatten()
+    diff = transformed.flatten() - colors_target
+    d = np.linalg.norm(diff)
+    return d
+
+# Use least square to find optimal color transformation matrix
+#color_transform(samples.flatten(), 1, 0, 0, 0, 1, 0, 0, 0, 1)
+ref_colors = np.array([list(ref)[2:5] for ref in REF_POINTS['lab']], dtype=np.float)
+ref_colors[:, 0:1] *= 255 / 100
+ref_colors[:, 1:3] += 128
+samples[:, 0:1] *= 255 / 100
+samples[:, 1:3] += 128
+print(ref_colors)
+print(samples)
+tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
+res_lsq = least_squares(color_transform, tmatrix, args=(
+    samples.flatten(), ref_colors.flatten()))
+tmatrix = res_lsq.x.reshape(3, 3)
+#tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
+print(res_lsq)
+#res = minimize(color_transform, samples.flatten(), method='Nelder-Mead', tol=1e-6)
+#print(res)
+
 cv2.imwrite('./images/output.jpg', image)
 cv2.imshow("Image", image)
+cv2.waitKey(0)
+
+'''image = image.astype(np.float)
+image[:, 0:1] *= 100 / 255
+image[:, 1:3] -= 128'''
+img_trans = np.rint(image.dot(tmatrix.T))
+'''img_trans[:, 0:1] *= 255 / 100
+img_trans[:, 1:3] += 128'''
+cv2.imshow("Image Transformed", img_trans.astype('uint8'))
 cv2.waitKey(0)
