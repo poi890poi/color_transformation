@@ -1,3 +1,8 @@
+import sys
+import math
+import operator
+from pprint import pprint
+
 import numpy as np
 import cv2
 import imutils
@@ -168,11 +173,33 @@ def rectIoU(bbox1, bbox2):
     iou = w * h / float(w1 * h1 + w2 * h2 - w * h)
     return iou
 
+# Merge overlapped contours
 for i in range(len(plist)):
     for j in range(i+1, len(plist)):
         iou = rectIoU(plist[i], plist[j])
         if iou > 0.6:
             plist[i] = (0, 0, 0, 0)
+new_list = list()
+for p in plist:
+    if p is not (0, 0, 0, 0):
+        new_list.append(p)
+plist = new_list
+del new_list
+
+# Sort contours
+plist = sorted(plist, key=operator.itemgetter(1))
+new_list = list()
+row_begin = 0
+while True:
+    row = plist[row_begin:row_begin+6]
+    if not row: break
+    row = sorted(row, key=operator.itemgetter(0))
+    print(row)
+    new_list += row
+    row_begin += 6
+plist = new_list
+del new_list
+pprint(plist)
 
 # Convert to target color space
 if COLOR_SPACE == 'xyz':
@@ -184,6 +211,31 @@ elif COLOR_SPACE == 'lab':
 else:
     raise ValueError('Unknown color space')
 
+def colorDistance(color_a, color_b):
+    ref_l, ref_a, ref_b = color_a
+    l, a, b = color_b
+    delta_l = (ref_l - l) ** 2
+    delta_a = (ref_a - a) ** 2
+    delta_b = (ref_b - b) ** 2
+    d = math.sqrt(delta_l + delta_a + delta_b)
+    return d
+
+def nearestColor(sample):
+    d_min = sys.float_info.max
+    for ref in REF_POINTS['lab']:
+        index, name, ref_l, ref_a, ref_b = ref
+        l, a, b = sample
+        delta_l = (ref_l - l) ** 2
+        delta_a = (ref_a - a) ** 2
+        delta_b = (ref_b - b) ** 2
+        d = math.sqrt(delta_l + delta_a + delta_b)
+        #print(sample, ref, d)
+        if d < d_min:
+            d_min = d
+            nearest = ref
+    return nearest, d
+
+ref_color_index = 0
 padding = 18
 for p in plist:
     if p is not (0, 0, 0, 0):
@@ -206,15 +258,32 @@ for p in plist:
         elif COLOR_SPACE == 'lab':
             x = np.average(lab_a[r[0]:r[1], r[2]:r[3]]) - 128
             y = np.average(lab_b[r[0]:r[1], r[2]:r[3]]) - 128
+            z = np.average(lab_l[r[0]:r[1], r[2]:r[3]]) * 100 / 255
         else:
             raise ValueError('Unknown color space')
-        cvalues = '%.2f, %.2f' % (x, y)
-        print(x, y, cvalues)
+        cvalues = '%d, %.2f, %.2f' % (z, x, y)
+        #nearest, d = nearestColor((z, x, y))
+        index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
+        d = colorDistance(ref_color, (z, x, y))
+        #print(x, y, cvalues)
+        #print()
+        # Print color values
         pt1 = tuple((bbox[:2] + [padding, padding]).astype(np.uint))
         pt2 = tuple((pt1 + bbox[-2:] - [padding*2-1, padding*2-1]).astype(np.uint))
         cv2.rectangle(image, pt1, pt2, (0, 255, 0), 2)
         cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
             1, (255, 255, 0), 1)
-cv2.imshow("Image", image)
+        # Print ref color
+        pt1 = tuple((bbox[:2] + [padding, padding + 16]).astype(np.uint))
+        cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
+            1, (255, 255, 0), 1)
+        # Print distance
+        distance = '%.4f' % (d,)
+        pt1 = tuple((bbox[:2] + [padding, padding + 32]).astype(np.uint))
+        cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
+            1, (255, 255, 0), 1)
 
+        ref_color_index += 1
+
+cv2.imshow("Image", image)
 cv2.waitKey(0)
