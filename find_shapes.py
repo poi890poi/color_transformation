@@ -9,8 +9,8 @@ import imutils
 from scipy.optimize import minimize, least_squares
 
 PATH_IN = './images/20200213_103455.jpg'
-#PATH_IN = './images/20200213_103542.jpg'
-PATH_IN = './images/color_checker.jpg'
+PATH_IN = './images/20200213_103542.jpg'
+#PATH_IN = './images/color_checker.jpg'
 WIDTH_OUT = 640
 
 COLOR_SPACE = 'lab'
@@ -218,13 +218,66 @@ else:
     raise ValueError('Unknown color space')
 
 def color_distance(color_a, color_b):
-    ref_l, ref_a, ref_b = color_a
-    l, a, b = color_b
-    delta_l = (ref_l - l) ** 2
+    l1, a1, b1 = color_a
+    l2, a2, b2 = color_b
+    c1 = math.sqrt(a1**2 + b1**2)
+    c2 = math.sqrt(a2**2 + b2**2)
+    l_delta = l2 - l1
+    l_mean = (l1 + l2) / 2
+    c_mean = (c1 + c2) / 2
+    c_7 = c_mean**7
+    c_25 = math.sqrt(c_7 / (c_7 + 25**7))
+    param_a_prime = 1 + (1 - c_25) / 2
+    a1_prime = a1 * param_a_prime
+    a2_prime = a2 * param_a_prime
+    c1_prime = math.sqrt(a1_prime**2 + b1**2)
+    c2_prime = math.sqrt(a2_prime**2 + b2**2)
+    c_prime_delta = c2_prime - c1_prime
+    c_prime_mean = (c1_prime + c2_prime) / 2
+    h1_prime = math.degrees(math.atan2(b1, a1_prime))
+    h2_prime = math.degrees(math.atan2(b2, a2_prime))
+    h_range = abs(h1_prime - h2_prime)
+    if h_range <= 180:
+        h_prime_delta = h2_prime - h1_prime
+    elif h_range > 180 and h2_prime <= h1_prime:
+        h_prime_delta = h2_prime - h1_prime + 360
+    elif h_range > 180 and h2_prime > h1_prime:
+        h_prime_delta = h2_prime - h1_prime - 360
+    else:
+        raise ValueError('Invalid value for H prime of color difference')
+    h_delta = (2 * math.sqrt(c1_prime * c2_prime) 
+        * math.sin(math.radians(h_prime_delta / 2)))
+    if h_range <= 180:
+        h_mean = (h1_prime + h2_prime) / 2
+    elif h_range > 180 and (h1_prime + h2_prime) < 360:
+        h_mean = (h1_prime + h2_prime + 360) / 2
+    elif h_range > 180 and (h1_prime + h2_prime) >= 360:
+        h_mean = (h1_prime + h2_prime - 360) / 2
+    else:
+        raise ValueError('Invalid value for H prime of color difference')
+    T = (1 - 0.17 * math.cos(math.radians(h_mean - 30))
+        + 0.24 * math.cos(math.radians(h_mean * 2))
+        + 0.32 * math.cos(math.radians(h_mean * 3 + 6))
+        - 0.20 * math.cos(math.radians(h_mean * 4 - 63)))
+    L50 = (l_mean - 50)**2
+    SL = 1 + 0.015 * L50 / math.sqrt(20 + L50)
+    SC = 1 + 0.045 * c_mean
+    SH = 1 + 0.015 * c_mean * T
+    rtr = math.radians(60 * math.exp(-(((h_mean - 275) / 25)**2)))
+    RT = -2 * math.sqrt(c_25) * math.sin(rtr)
+    kL = 1.0
+    kC = 1.0
+    kH = 1.0
+    component_c = c_prime_delta / kC / SC
+    component_h = h_delta / kH / SH
+    E00 = math.sqrt((l_delta / kL / SL)**2 
+        + component_c**2 + component_h**2 
+        + RT * component_c * component_h)
+    '''delta_l = (ref_l - l) ** 2
     delta_a = (ref_a - a) ** 2
     delta_b = (ref_b - b) ** 2
-    d = math.sqrt(delta_l + delta_a + delta_b)
-    return d
+    d = math.sqrt(delta_l + delta_a + delta_b)'''
+    return E00
 
 def nearest_color(sample):
     d_min = sys.float_info.max
@@ -315,7 +368,8 @@ print(ref_colors)
 print(samples)
 tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
 res_lsq = least_squares(color_transform, tmatrix, args=(
-    samples.flatten(), ref_colors.flatten()))
+    samples.flatten(), ref_colors.flatten()), jac = '3-point', loss='soft_l1',
+    tr_solver='exact')
 tmatrix = res_lsq.x.reshape(3, 3)
 #tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
 print(res_lsq)
