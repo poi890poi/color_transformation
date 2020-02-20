@@ -7,6 +7,10 @@ import numpy as np
 import cv2
 import imutils
 from scipy.optimize import minimize, least_squares
+# colormath is slower than my own implementation
+#from colormath.color_objects import LabColor
+#from colormath.color_diff import delta_e_cie2000
+
 
 PATH_IN = './images/20200213_103455.jpg'
 PATH_IN = './images/20200213_103542.jpg'
@@ -279,6 +283,67 @@ def color_distance(color_a, color_b):
     d = math.sqrt(delta_l + delta_a + delta_b)'''
     return E00
 
+def color_distance_sum(colors_a, colors_b):
+    l1, a1, b1 = np.split(colors_a, 3, axis=1)
+    l2, a2, b2 = np.split(colors_b, 3, axis=1)
+    np.split(colors_b, 3, axis=1)
+    c1 = np.sqrt(a1**2 + b1**2)
+    c2 = np.sqrt(a2**2 + b2**2)
+    l_delta = l2 - l1
+    l_mean = (l1 + l2) / 2
+    c_mean = (c1 + c2) / 2
+    c_7 = c_mean**7
+    c_25 = np.sqrt(c_7 / (c_7 + 25**7))
+    param_a_prime = 1 + (1 - c_25) / 2
+    a1_prime = a1 * param_a_prime
+    a2_prime = a2 * param_a_prime
+    c1_prime = np.sqrt(a1_prime**2 + b1**2)
+    c2_prime = np.sqrt(a2_prime**2 + b2**2)
+    c_prime_delta = c2_prime - c1_prime
+    c_prime_mean = (c1_prime + c2_prime) / 2
+    h1_prime = np.degrees(np.arctan2(b1, a1_prime))
+    h2_prime = np.degrees(np.arctan2(b2, a2_prime))
+    h_range = np.absolute(h1_prime - h2_prime)
+    h_prime_delta = np.copy(h_range)
+    h_prime_delta[h_range <= 180] = \
+        h2_prime[h_range <= 180] - h1_prime[h_range <= 180]
+    h_prime_delta[(h_range > 180) & (h2_prime <= h1_prime)] = (
+        h2_prime[(h_range > 180) & (h2_prime <= h1_prime)] 
+        - h1_prime[(h_range > 180) & (h2_prime <= h1_prime)] + 360)
+    h_prime_delta[(h_range > 180) & (h2_prime > h1_prime)] = (
+        h2_prime[(h_range > 180) & (h2_prime > h1_prime)] 
+        - h1_prime[(h_range > 180) & (h2_prime > h1_prime)] - 360)
+    h_delta = (2 * np.sqrt(c1_prime * c2_prime) 
+        * np.sin(np.radians(h_prime_delta / 2)))
+    h_mean = np.copy(h_range)
+    h_mean[h_range <= 180] = \
+        (h1_prime[h_range <= 180] + h2_prime[h_range <= 180]) / 2
+    h_mean[(h_range > 180) & ((h1_prime + h2_prime) < 360)] = ((
+        h1_prime[(h_range > 180) & ((h1_prime + h2_prime) < 360)] 
+        - h2_prime[(h_range > 180) & ((h1_prime + h2_prime) < 360)] + 360) / 2)
+    h_mean[(h_range > 180) & ((h1_prime + h2_prime) >= 360)] = ((
+        h1_prime[(h_range > 180) & ((h1_prime + h2_prime) >= 360)] 
+        - h2_prime[(h_range > 180) & ((h1_prime + h2_prime) >= 360)] - 360) / 2)
+    T = (1 - 0.17 * np.cos(np.radians(h_mean - 30))
+        + 0.24 * np.cos(np.radians(h_mean * 2))
+        + 0.32 * np.cos(np.radians(h_mean * 3 + 6))
+        - 0.20 * np.cos(np.radians(h_mean * 4 - 63)))
+    L50 = (l_mean - 50)**2
+    SL = 1 + 0.015 * L50 / np.sqrt(20 + L50)
+    SC = 1 + 0.045 * c_mean
+    SH = 1 + 0.015 * c_mean * T
+    rtr = np.radians(60 * np.exp(-(((h_mean - 275) / 25)**2)))
+    RT = -2 * np.sqrt(c_25) * np.sin(rtr)
+    kL = 1.0
+    kC = 1.0
+    kH = 1.0
+    component_c = c_prime_delta / kC / SC
+    component_h = h_delta / kH / SH
+    E00 = np.sqrt((l_delta / kL / SL)**2 
+        + component_c**2 + component_h**2 
+        + RT * component_c * component_h)
+    return np.sum(E00)
+
 def nearest_color(sample):
     d_min = sys.float_info.max
     for ref in REF_POINTS['lab']:
@@ -353,8 +418,15 @@ def color_transform(tmatrix, colors_train, colors_target):
     # einsum subscriptor for N vectors dot N matrices 'ij,ikj->ik'
     transformed = np.einsum('ij,kj->ik', colors_train, tmatrix)
     #diff = transformed.flatten() - REF_MATRICES['lab'].flatten()
-    diff = transformed.flatten() - colors_target
-    d = np.linalg.norm(diff)
+    #diff = transformed.flatten() - colors_target
+    #d = np.linalg.norm(diff)
+    d = 0.0
+    target = colors_target.reshape((24, 3))
+    #for i in range(24):
+    #    d += color_distance(transformed[i], target[i])
+        #d += delta_e_cie2000(
+        #    LabColor(*transformed[i]), LabColor(*target[i]))
+    d = color_distance_sum(transformed, target)
     return d
 
 # Use least square to find optimal color transformation matrix
@@ -364,8 +436,6 @@ ref_colors[:, 0:1] *= 255 / 100
 ref_colors[:, 1:3] += 128
 samples[:, 0:1] *= 255 / 100
 samples[:, 1:3] += 128
-print(ref_colors)
-print(samples)
 tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
 res_lsq = least_squares(color_transform, tmatrix, args=(
     samples.flatten(), ref_colors.flatten()), jac = '3-point', loss='soft_l1',
