@@ -7,6 +7,9 @@ import numpy as np
 import cv2
 import imutils
 from scipy.optimize import minimize, least_squares
+from sklearn.neighbors import KernelDensity
+from sklearn.cluster import KMeans
+
 # colormath is slower than my own implementation
 #from colormath.color_objects import LabColor
 #from colormath.color_diff import delta_e_cie2000
@@ -15,7 +18,9 @@ from scipy.optimize import minimize, least_squares
 PATH_IN = './images/20200213_103455.jpg'
 PATH_IN = './images/20200213_103542.jpg'
 #PATH_IN = './images/color_checker.jpg'
-WIDTH_OUT = 640
+#PATH_IN = './images/20200220_120820.jpg'
+#PATH_IN = './images/20200220_120829.jpg'
+WIDTH_OUT = 800
 
 COLOR_SPACE = 'lab'
 REF_POINTS = {
@@ -99,16 +104,23 @@ gray, a, b = cv2.split(lab)
 # Use different thresholding to get contours to deal with the problem
 # that different patches have different contrast.
 CASCADES = [
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 2),
-    (cv2.ADAPTIVE_THRESH_MEAN_C, 11, 2),
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 5, 2),
+    (cv2.ADAPTIVE_THRESH_MEAN_C, 5, 2),
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 5, 6),
+    (cv2.ADAPTIVE_THRESH_MEAN_C, 5, 6),
     (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 7, 2),
     (cv2.ADAPTIVE_THRESH_MEAN_C, 7, 2),
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 2),
+    (cv2.ADAPTIVE_THRESH_MEAN_C, 11, 2),
     (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 4),
     (cv2.ADAPTIVE_THRESH_MEAN_C, 11, 4),
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 17, 2),
-    (cv2.ADAPTIVE_THRESH_MEAN_C, 17, 2),
     (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 13, 2),
     (cv2.ADAPTIVE_THRESH_MEAN_C, 13, 2),
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 17, 2),
+    (cv2.ADAPTIVE_THRESH_MEAN_C, 17, 2),
+]
+CASCADES = [
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 4),
 ]
 contours = list()
 for c in CASCADES:
@@ -126,16 +138,17 @@ for c in CASCADES:
         cv2.CHAIN_APPROX_TC89_KCOS)
     clist = imutils.grab_contours(clist)
     contours += clist
-#cv2.drawContours(resized, contours, -1, (0, 255, 0), 3)
-#cv2.imshow('Contours', resized)
-#cv2.waitKey(0)
-#cv2.destroyAllWindows()
+cv2.drawContours(resized, contours, -1, (0, 255, 0), 3)
+cv2.imshow('Contours', resized)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
 
 sd = ShapeDetector()
 
 plist = list() # List of the bounding box of the color patch
 
 # loop over the contours
+image_contours = np.copy(image)
 for c in contours:
     # compute the center of the contour, then detect the name of the
     # shape using only the contour
@@ -154,12 +167,12 @@ for c in contours:
     area = w * h / float(dst_width) / float(dst_height)
     if area < 0.005 or area > 0.035: continue
     plist.append(bounding)
-    #cv2.drawContours(image, [c], -1, (0, 255, 0), 2)
-    #cv2.putText(image, shape, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX,
-    #    0.5, (255, 255, 255), 2)
+    cv2.drawContours(image_contours, [c], -1, (0, 255, 0), 2)
+    cv2.putText(image_contours, shape, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX,
+        0.5, (255, 255, 255), 2)
 # show the output image
-#cv2.imshow("Image", image)
-#cv2.waitKey(0)
+cv2.imshow("Contours", image_contours)
+cv2.waitKey(0)
 
 def rect_iou(bbox1, bbox2):
     '''
@@ -205,11 +218,109 @@ plist = new_list
 del new_list
 pprint(plist)
 
-# Use contours 18 cyan and 23 neutral to find contour 24 black
-if len(plist) < 24:
-    plist.append((plist[17][0], plist[22][1], 
-        int((plist[17][2] + plist[22][2]) / 2), 
-        int((plist[17][3] + plist[22][3]) / 2)))
+def grids_integrity(params, centers):
+    z = 1
+    tmatrix = params.reshape(3, 3)
+    centers = centers.reshape((-1, 2))
+    centers = np.concatenate((centers, 
+        np.full((centers.shape[0], 1), z)), axis=1)
+    transformed = np.einsum('ij,kj->ik', centers, tmatrix)
+    #print(left_top, z, tmatrix, centers, transformed, unity)
+    centers = transformed[:, 0:2]
+    dev = 0.0
+    '''for i in range(centers.shape[0]):
+        units = (centers[i] - left_top) / unity
+        d = np.absolute(units - np.rint(units))
+        dev += np.sum(d)'''
+    '''for i in range(centers.shape[0]):
+        for j in range(centers.shape[0]):
+            if j > i:
+                units = (centers[j] - centers[i]) / unity
+                d = (units - np.rint(units)) ** 2
+                dev += np.sum(d)'''
+    x = np.sort(centers[:, 0:1], axis=0)
+    y = np.sort(centers[:, 1:2], axis=0)
+    kmx = KMeans(n_clusters=6).fit(x)
+    kmy = KMeans(n_clusters=4).fit(y)
+    d = kmx.inertia_ + kmy.inertia_
+    #print(d)
+    return d
+    centers = np.sort(kmx.cluster_centers_, axis=0)
+    d = centers[1:, :] - centers[:-1, :]
+    dx = np.std(d)
+    centers = np.sort(kmx.cluster_centers_, axis=0)
+    d = centers[1:, :] - centers[:-1, :]
+    dy = np.std(d)
+    #km.transform(x).min(axis=1)
+    #print(x, km.labels_, d, np.std(d))
+    #kde = KernelDensity(kernel='tophat', bandwidth=0.75).fit(x)
+    #print(x, np.exp(kde.score_samples(x)))
+    #print(dev)
+    #d = np.sqrt(dx**2 + dy**2)
+    d = dx**2 + dy**2
+    print(d)
+    return d
+
+grids = np.array(plist, dtype=np.float)
+grids[:, 0] += grids[:, 2] / 2
+grids[:, 1] += grids[:, 3] / 2
+print('grids original', grids)
+grids = grids[:, 0:2] / thresh.shape[1]
+params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
+grids_integrity(params, grids.flatten())
+'''params = np.array([ 7.77441302e-01, -4.13376497e-01, -2.69903670e-11, -1.35282663e-02,
+        1.00005537e+00,  7.56582538e-04,  0.00000000e+00, -7.56582538e-04,
+        9.99243417e-01],
+    dtype=np.float)
+grids_integrity(params, grids.flatten())'''
+res_lsq = least_squares(grids_integrity, params, args=(
+    grids.flatten(),), jac='3-point', loss='soft_l1', tr_solver='exact')
+tmatrix = res_lsq.x.reshape((3, 3))
+tmatrix_inv = np.linalg.inv(tmatrix)
+print(tmatrix_inv)
+z = 1
+grids = np.concatenate((grids, 
+    np.full((grids.shape[0], 1), z)), axis=1)
+grids = grids.dot(tmatrix.T)
+#grids = (grids * thresh.shape[1]).astype(np.uint)
+print('grids aligned', grids)
+x = np.sort(grids[:, 0:1], axis=0)
+y = np.sort(grids[:, 1:2], axis=0)
+kmx = KMeans(n_clusters=6).fit(x)
+kmy = KMeans(n_clusters=4).fit(y)
+print(kmx.labels_, kmy.labels_, kmx.cluster_centers_, kmy.cluster_centers_)
+grids_3d = np.ndarray(shape=(24, 3), dtype=np.float)
+centersx = np.sort(kmx.cluster_centers_, axis=0).ravel()
+centersy = np.sort(kmy.cluster_centers_, axis=0)
+grids_3d[:, 0] = np.tile(centersx, 4)
+grids_3d[:, 1] = np.tile(centersy, 6).ravel()
+grids_3d[:, 2] = np.average(grids[:, 2:3])
+print(grids_3d)
+plist = np.array(plist)
+print(plist)
+gw = int(np.average(plist[:, 2:3]) / 3)
+gh = int(np.average(plist[:, 2:4]) / 3)
+diag = np.array((gw, gh + 1))
+print(gw, gh)
+grids = (grids_3d.dot(tmatrix_inv.T) * thresh.shape[1])[:, 0:2]
+
+image_grids = np.copy(image)
+for p in np.rint(grids * ratio).astype(np.uint):
+    #cv2.circle(image_grids, tuple(p), 30, (0, 255, 0), 2)
+    pt1 = tuple((p - diag * ratio).astype(np.uint))
+    pt2 = tuple((p + diag * ratio).astype(np.uint))
+    print(pt1, pt2)
+    cv2.rectangle(image_grids, pt1, pt2, (0, 255, 0), 2)
+grids -= diag
+grids = np.concatenate((grids, 
+    np.full((grids.shape[0], 1), gw * 2)), axis=1)
+grids = np.concatenate((grids, 
+    np.full((grids.shape[0], 1), gh * 2)), axis=1)
+plist = grids.astype(np.uint)
+print(plist)
+# show the output image
+cv2.imshow("Grids", image_grids)
+cv2.waitKey(0)
 
 # Convert to target color space
 if COLOR_SPACE == 'xyz':
@@ -274,7 +385,7 @@ def color_distance(color_a, color_b):
     kH = 1.0
     component_c = c_prime_delta / kC / SC
     component_h = h_delta / kH / SH
-    E00 = math.sqrt((l_delta / kL / SL)**2 
+    E00 = ((l_delta / kL / SL)**2 
         + component_c**2 + component_h**2 
         + RT * component_c * component_h)
     '''delta_l = (ref_l - l) ** 2
@@ -361,7 +472,7 @@ def nearest_color(sample):
 
 samples = np.ndarray(shape=(24, 3), dtype=np.float)
 ref_color_index = 0
-padding = 18
+padding = 0
 for p in plist:
     bbox = np.array(p, dtype=np.float) * ratio
     x, y, w, h = bbox.astype(np.uint)
@@ -438,7 +549,7 @@ samples[:, 0:1] *= 255 / 100
 samples[:, 1:3] += 128
 tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
 res_lsq = least_squares(color_transform, tmatrix, args=(
-    samples.flatten(), ref_colors.flatten()), jac = '3-point', loss='soft_l1',
+    samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
     tr_solver='exact')
 tmatrix = res_lsq.x.reshape(3, 3)
 #tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
