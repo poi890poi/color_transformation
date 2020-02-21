@@ -17,9 +17,9 @@ from sklearn.cluster import KMeans
 
 PATH_IN = './images/20200213_103455.jpg'
 PATH_IN = './images/20200213_103542.jpg'
-#PATH_IN = './images/color_checker.jpg'
-#PATH_IN = './images/20200220_120820.jpg'
-#PATH_IN = './images/20200220_120829.jpg'
+PATH_IN = './images/color_checker.jpg'
+PATH_IN = './images/20200220_120820.jpg'
+PATH_IN = './images/20200220_120829.jpg'
 WIDTH_OUT = 800
 
 COLOR_SPACE = 'lab'
@@ -120,7 +120,7 @@ CASCADES = [
     (cv2.ADAPTIVE_THRESH_MEAN_C, 17, 2),
 ]
 CASCADES = [
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 4),
+    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 2),
 ]
 contours = list()
 for c in CASCADES:
@@ -146,6 +146,7 @@ cv2.destroyAllWindows()
 sd = ShapeDetector()
 
 plist = list() # List of the bounding box of the color patch
+anchors = list()
 
 # loop over the contours
 image_contours = np.copy(image)
@@ -166,6 +167,8 @@ for c in contours:
     x, y, w, h = bounding
     area = w * h / float(dst_width) / float(dst_height)
     if area < 0.005 or area > 0.035: continue
+    #anchors.append(poly)
+    anchors.append(np.mean(poly, axis=0))
     plist.append(bounding)
     cv2.drawContours(image_contours, [c], -1, (0, 255, 0), 2)
     cv2.putText(image_contours, shape, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX,
@@ -218,74 +221,42 @@ plist = new_list
 del new_list
 pprint(plist)
 
-def grids_integrity(params, centers):
+def grids_integrity(params, vectors):
     z = 1
     tmatrix = params.reshape(3, 3)
-    centers = centers.reshape((-1, 2))
-    centers = np.concatenate((centers, 
-        np.full((centers.shape[0], 1), z)), axis=1)
-    transformed = np.einsum('ij,kj->ik', centers, tmatrix)
-    #print(left_top, z, tmatrix, centers, transformed, unity)
-    centers = transformed[:, 0:2]
+    vectors = vectors.reshape((-1, 2))
+    vectors = np.concatenate((vectors, 
+        np.full((vectors.shape[0], 1), z)), axis=1)
+    transformed = np.einsum('ij,kj->ik', vectors, tmatrix)
+    #print(left_top, z, tmatrix, vectors, transformed, unity)
+    vectors = transformed[:, 0:2]
     dev = 0.0
-    '''for i in range(centers.shape[0]):
-        units = (centers[i] - left_top) / unity
-        d = np.absolute(units - np.rint(units))
-        dev += np.sum(d)'''
-    '''for i in range(centers.shape[0]):
-        for j in range(centers.shape[0]):
-            if j > i:
-                units = (centers[j] - centers[i]) / unity
-                d = (units - np.rint(units)) ** 2
-                dev += np.sum(d)'''
-    x = np.sort(centers[:, 0:1], axis=0)
-    y = np.sort(centers[:, 1:2], axis=0)
+    x = np.sort(vectors[:, 0:1], axis=0)
+    y = np.sort(vectors[:, 1:2], axis=0)
     kmx = KMeans(n_clusters=6).fit(x)
     kmy = KMeans(n_clusters=4).fit(y)
     d = kmx.inertia_ + kmy.inertia_
     #print(d)
     return d
-    centers = np.sort(kmx.cluster_centers_, axis=0)
-    d = centers[1:, :] - centers[:-1, :]
-    dx = np.std(d)
-    centers = np.sort(kmx.cluster_centers_, axis=0)
-    d = centers[1:, :] - centers[:-1, :]
-    dy = np.std(d)
-    #km.transform(x).min(axis=1)
-    #print(x, km.labels_, d, np.std(d))
-    #kde = KernelDensity(kernel='tophat', bandwidth=0.75).fit(x)
-    #print(x, np.exp(kde.score_samples(x)))
-    #print(dev)
-    #d = np.sqrt(dx**2 + dy**2)
-    d = dx**2 + dy**2
-    print(d)
-    return d
 
-grids = np.array(plist, dtype=np.float)
-grids[:, 0] += grids[:, 2] / 2
-grids[:, 1] += grids[:, 3] / 2
-print('grids original', grids)
-grids = grids[:, 0:2] / thresh.shape[1]
+anchors = (np.array(anchors, dtype=np.float).reshape(-1, 2)
+    / thresh.shape[1])
+print('anchors', anchors)
 params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
-grids_integrity(params, grids.flatten())
-'''params = np.array([ 7.77441302e-01, -4.13376497e-01, -2.69903670e-11, -1.35282663e-02,
-        1.00005537e+00,  7.56582538e-04,  0.00000000e+00, -7.56582538e-04,
-        9.99243417e-01],
-    dtype=np.float)
-grids_integrity(params, grids.flatten())'''
+grids_integrity(params, anchors.flatten())
 res_lsq = least_squares(grids_integrity, params, args=(
-    grids.flatten(),), jac='3-point', loss='soft_l1', tr_solver='exact')
+    anchors.flatten(),), jac='3-point', loss='soft_l1', tr_solver='exact')
 tmatrix = res_lsq.x.reshape((3, 3))
 tmatrix_inv = np.linalg.inv(tmatrix)
 print(tmatrix_inv)
 z = 1
-grids = np.concatenate((grids, 
-    np.full((grids.shape[0], 1), z)), axis=1)
-grids = grids.dot(tmatrix.T)
+anchors = np.concatenate((anchors, 
+    np.full((anchors.shape[0], 1), z)), axis=1)
+anchors = anchors.dot(tmatrix.T)
 #grids = (grids * thresh.shape[1]).astype(np.uint)
-print('grids aligned', grids)
-x = np.sort(grids[:, 0:1], axis=0)
-y = np.sort(grids[:, 1:2], axis=0)
+print('grids aligned', anchors)
+x = np.sort(anchors[:, 0:1], axis=0)
+y = np.sort(anchors[:, 1:2], axis=0)
 kmx = KMeans(n_clusters=6).fit(x)
 kmy = KMeans(n_clusters=4).fit(y)
 print(kmx.labels_, kmy.labels_, kmx.cluster_centers_, kmy.cluster_centers_)
@@ -294,7 +265,7 @@ centersx = np.sort(kmx.cluster_centers_, axis=0).ravel()
 centersy = np.sort(kmy.cluster_centers_, axis=0)
 grids_3d[:, 0] = np.tile(centersx, 4)
 grids_3d[:, 1] = np.tile(centersy, 6).ravel()
-grids_3d[:, 2] = np.average(grids[:, 2:3])
+grids_3d[:, 2] = np.average(anchors[:, 2:3])
 print(grids_3d)
 plist = np.array(plist)
 print(plist)
