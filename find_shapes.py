@@ -16,11 +16,11 @@ from colormath.color_objects import LabColor
 from colormath.color_diff import delta_e_cie2000
 
 
-#PATH_IN = './images/20200213_103455.jpg'
+PATH_IN = './images/20200213_103455.jpg'
 #PATH_IN = './images/20200213_103542.jpg'
-PATH_IN = './images/color_checker.jpg'
-PATH_IN = './images/20200220_120829.jpg'
-PATH_IN = './images/20200220_120820.jpg'
+#PATH_IN = './images/color_checker.jpg'
+#PATH_IN = './images/20200220_120829.jpg'
+#PATH_IN = './images/20200220_120820.jpg'
 
 COLOR_SPACE = 'lab'
 REF_POINTS = {
@@ -85,7 +85,7 @@ class ImageProcessing:
         # initialize the shape name and approximate the contour
         shape = self.SHAPE_UNIDENTIFIED
         peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.04 * peri, True)
+        approx = cv2.approxPolyDP(c, 0.01 * peri, True)
         bounding = cv2.boundingRect(approx)
 
         # if the shape is a triangle, it will have 3 vertices
@@ -148,9 +148,9 @@ class ImageProcessing:
         '''
         lab = cv2.cvtColor(self.__img_resized, cv2.COLOR_BGR2LAB)
         gray, a, b = cv2.split(lab)
-        method, blockSize, C, *_ = (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 2)
         blurred = cv2.GaussianBlur(gray, (9, 9), 0)
         if DEBUG: self.display('Blurred', blurred)
+        method, blockSize, C, *_ = (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 7, 2)
         binary = cv2.adaptiveThreshold(blurred, 255, method,
                     cv2.THRESH_BINARY, blockSize, C)
         if DEBUG: self.display('Binary', binary)
@@ -640,7 +640,7 @@ tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
 #tmatrix = np.array((1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1), dtype=np.float)
 res_lsq = least_squares(color_transform, tmatrix, args=(
     samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-    tr_solver='lsmr', ftol=None, xtol=1e-12, gtol=None, max_nfev=9000)
+    tr_solver='exact', ftol=None, xtol=1e-12, gtol=None, max_nfev=9000)
 tmatrix = res_lsq.x.reshape(3, 3)
 #tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
 print(res_lsq)
