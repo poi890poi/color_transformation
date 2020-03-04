@@ -12,15 +12,15 @@ from sklearn.neighbors import KernelDensity
 from sklearn.cluster import KMeans
 
 # colormath is slower than my own implementation
-#from colormath.color_objects import LabColor
-#from colormath.color_diff import delta_e_cie2000
+from colormath.color_objects import LabColor
+from colormath.color_diff import delta_e_cie2000
 
 
-PATH_IN = './images/20200213_103455.jpg'
-PATH_IN = './images/20200213_103542.jpg'
+#PATH_IN = './images/20200213_103455.jpg'
+#PATH_IN = './images/20200213_103542.jpg'
 PATH_IN = './images/color_checker.jpg'
-PATH_IN = './images/20200220_120820.jpg'
 PATH_IN = './images/20200220_120829.jpg'
+PATH_IN = './images/20200220_120820.jpg'
 
 COLOR_SPACE = 'lab'
 REF_POINTS = {
@@ -156,7 +156,7 @@ class ImageProcessing:
         if DEBUG: self.display('Binary', binary)
 
         # Apply erosion to remove noises connected to the square.
-        kernel = np.ones((5,5),np.uint8)
+        kernel = np.ones((16,16),np.uint8)
         binary = cv2.erode(binary, kernel)
         if DEBUG: self.display('Eroded', binary)
 
@@ -181,7 +181,7 @@ class ImageProcessing:
             if shape != self.SHAPE_SQUARE: continue
             A = cv2.contourArea(approx) * self.__area_factor
             print('area', A)
-            if A > 0.008 or A < 0.003: continue
+            if A > 0.016 or A < 0.003: continue
             polygons.append(approx)
             M = cv2.moments(approx)
             center = (M["m10"] / M["m00"], M["m01"] / M["m00"])
@@ -371,9 +371,16 @@ cv2.waitKey(0)
 cv2.imshow("Mask", image_mask)
 cv2.waitKey(0)
 
-def color_distance(color_a, color_b):
-    l1, a1, b1 = color_a
-    l2, a2, b2 = color_b
+def color_distance_(color_a_, color_b_):
+    l1, a1, b1 = color_a_
+    l2, a2, b2 = color_b_
+    color_a = LabColor(l1/100, a1, b1)
+    color_b = LabColor(l2/100, a2, b2)
+    return delta_e_cie2000(color_a, color_b)
+
+def color_distance(color_a_, color_b_):
+    l1, a1, b1 = color_a_
+    l2, a2, b2 = color_b_
     c1 = math.sqrt(a1**2 + b1**2)
     c2 = math.sqrt(a2**2 + b2**2)
     l_delta = l2 - l1
@@ -424,7 +431,7 @@ def color_distance(color_a, color_b):
     kH = 1.0
     component_c = c_prime_delta / kC / SC
     component_h = h_delta / kH / SH
-    E00 = ((l_delta / kL / SL)**2 
+    E00 = np.sqrt((l_delta / kL / SL)**2 
         + component_c**2 + component_h**2 
         + RT * component_c * component_h)
     '''delta_l = (ref_l - l) ** 2
@@ -489,7 +496,7 @@ def color_distance_sum(colors_a, colors_b):
     kH = 1.0
     component_c = c_prime_delta / kC / SC
     component_h = h_delta / kH / SH
-    E00 = np.sqrt((l_delta / kL / SL)**2 
+    E00 = ((l_delta / kL / SL)**2 
         + component_c**2 + component_h**2 
         + RT * component_c * component_h)
     return np.sum(E00)
@@ -510,21 +517,21 @@ def nearest_color(sample):
     return nearest, d
 
 # Convert to target color space
+image = np.copy(imgp.image)
 if COLOR_SPACE == 'xyz':
-    cie = cv2.cvtColor(imgp.image, cv2.COLOR_BGR2XYZ)
+    cie = cv2.cvtColor(image, cv2.COLOR_BGR2XYZ)
     cie_x, cie_y, cie_z = cv2.split(cie)
 elif COLOR_SPACE == 'lab':
-    lab = cv2.cvtColor(imgp.image, cv2.COLOR_BGR2LAB)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     lab_l, lab_a, lab_b = cv2.split(lab)
 else:
     raise ValueError('Unknown color space')
 
+padding = 0
 image = np.copy(imgp.image)
 samples = np.ndarray(shape=(24, 3), dtype=np.float)
 ref_color_index = 0
-padding = 0
 for p in color_patches:
-    print(p)
     image_mask = np.zeros(imgp.image.shape[:2], np.uint8)
     cv2.fillConvexPoly(image_mask, p, (255,))
     ''' # Use histogram instead of mean to calculate the XY values
@@ -544,7 +551,7 @@ for p in color_patches:
         y = color_mean[2] - 128
     else:
         raise ValueError('Unknown color space')
-    cvalues = '%.2f, %.2f' % (x, y)
+    cvalues = '%d, %.2f, %.2f' % (z, x, y)
     samples[ref_color_index] = (z, x, y)
     print(ref_color_index, (z, x, y), samples[ref_color_index])
     #nearest, d = nearest_color((z, x, y))
@@ -555,16 +562,20 @@ for p in color_patches:
     # Print color values
     cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
     pt1 = tuple((p[0].ravel() + [padding, padding + 16]).astype(np.uint))
-    print(pt1)
     cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
         1, (255, 255, 0), 1)
     # Print ref color
     pt1 = tuple((p[0].ravel() + [padding, padding + 32]).astype(np.uint))
     cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
         1, (255, 255, 0), 1)
+    # Print reference color values
+    ref_values = '%.2f, %.2f' % (ref_color[1], ref_color[2])
+    pt1 = tuple((p[0].ravel() + [padding, padding + 48]).astype(np.uint))
+    cv2.putText(image, ref_values, pt1, cv2.FONT_HERSHEY_PLAIN,
+        1, (255, 255, 0), 1)
     # Print distance
     distance = 'd=%.4f' % (d,)
-    pt1 = tuple((p[0].ravel() + [padding, padding + 48]).astype(np.uint))
+    pt1 = tuple((p[0].ravel() + [padding, padding + 64]).astype(np.uint))
     cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
         1, (255, 255, 0), 1)
 
@@ -581,6 +592,7 @@ def color_transform(tmatrix, colors_train, colors_target):
     #diff = transformed.flatten() - colors_target
     #d = np.linalg.norm(diff)
     d = 0.0
+    d_check = 0.0
     transformed = transformed[:, 0:3]
     target = colors_target.reshape((24, 3))
     #for i in range(24):
@@ -588,22 +600,51 @@ def color_transform(tmatrix, colors_train, colors_target):
         #d += delta_e_cie2000(
         #    LabColor(*transformed[i]), LabColor(*target[i]))
     d = color_distance_sum(transformed, target)
+    '''for i in range(target.shape[0]):
+        d_check += color_distance(transformed[i], target[i])
+        my_d = color_distance(transformed[i], target[i])
+        color_a = LabColor(transformed[i][0]/100, transformed[i][1], transformed[i][2])
+        color_b = LabColor(target[i][0]/100, target[i][1], target[i][2])
+        color_math_d = delta_e_cie2000(color_a, color_b)
+        print('mine vs color_math', my_d, color_math_d)
+    print('color_distance_sum', d, d_check)'''
+    print('color_distance_sum', d)
+    return d
+    d = 0.0
+    for i in range(target.shape[0]):
+        color_a = LabColor(transformed[i][0]/100, transformed[i][1], transformed[i][2])
+        color_b = LabColor(target[i][0]/100, target[i][1], target[i][2])
+        d += delta_e_cie2000(color_a, color_b)
     return d
 
 # Use least square to find optimal color transformation matrix
 #color_transform(samples.flatten(), 1, 0, 0, 0, 1, 0, 0, 0, 1)
 ref_colors = np.array([list(ref)[2:5] for ref in REF_POINTS['lab']], dtype=np.float)
-ref_colors[:, 0:1] *= 255 / 100
+'''ref_colors[:, 0:1] *= 255 / 100
 ref_colors[:, 1:3] += 128
 samples[:, 0:1] *= 255 / 100
-samples[:, 1:3] += 128
+samples[:, 1:3] += 128'''
+
+'''print('ref_colors', ref_colors)
+print('samples', samples)
+ref_colors[:, 0:1] *= 255 / 100 
+ref_colors[:, 0:1] -= 128
+ref_colors[:, :] /= 128
+samples[:, 0:1] *= 255 / 100 
+samples[:, 0:1] -= 128
+samples[:, :] /= 128
+print('ref_colors', ref_colors)
+print('samples', samples)'''
+
 tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
 #tmatrix = np.array((1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1), dtype=np.float)
 res_lsq = least_squares(color_transform, tmatrix, args=(
     samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-    tr_solver='exact')
+    tr_solver='lsmr', ftol=None, xtol=1e-12, gtol=None, max_nfev=9000)
 tmatrix = res_lsq.x.reshape(3, 3)
+#tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
 print(res_lsq)
+#raise
 #res = minimize(color_transform, samples.flatten(), method='Nelder-Mead', tol=1e-6)
 #print(res)
 
@@ -614,8 +655,71 @@ cv2.waitKey(0)
 '''image = image.astype(np.float)
 image[:, 0:1] *= 100 / 255
 image[:, 1:3] -= 128'''
-img_trans = np.rint(image.dot(tmatrix.T))
+image = np.copy(imgp.image)#.astype(np.float)
+lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
+
+lab[:, :, 0] *= 100 / 255
+lab[:, :, 1:3] -= 128
+print('pre_dot', image[100][100])
+lab = lab.dot(tmatrix.T)
+lab[:, :, 1:3] += 128
+lab[:, :, 0] *= 255 / 100
+print('post_dot', image[100][100])
+
+image = cv2.cvtColor(np.rint(lab).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+'''image[:, :, 0:1] *= 100 / 255
+image[:, :, 0:1] -= 128
+image[:, :, :] /= 128
+print('pre_dot', image[100][100])
+image = image.dot(tmatrix.T)
+image[:, :, :] *= 128
+image[:, :] += 128
+image[:, :, 0:1] *= 255 / 100
+print('post_dot', image[100][100])'''
+
+ref_color_index = 0
+#image = np.rint(image)
+for p in color_patches:
+    image_mask = np.zeros(image.shape[:2], np.uint8)
+    cv2.fillConvexPoly(image_mask, p, (255,))
+    if COLOR_SPACE == 'xyz':
+        x = np.average(cie_x[r[0]:r[1], r[2]:r[3]]) / 255
+        y = np.average(cie_y[r[0]:r[1], r[2]:r[3]]) / 255
+    elif COLOR_SPACE == 'lab':
+        color_mean = cv2.mean(lab, image_mask)
+        print('mean', lab.shape, lab[20][20], color_mean)
+        z = color_mean[0] * 100 / 255
+        x = color_mean[1] - 128
+        y = color_mean[2] - 128
+    else:
+        raise ValueError('Unknown color space')
+    cvalues = '%d, %.2f, %.2f' % (z, x, y)
+    samples[ref_color_index] = (z, x, y)
+    print(ref_color_index, (z, x, y), samples[ref_color_index])
+    #nearest, d = nearest_color((z, x, y))
+    index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
+    d = color_distance(ref_color, (z, x, y))
+    #print(x, y, cvalues)
+    #print()
+    # Print color values
+    cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
+    pt1 = tuple((p[0].ravel() + [padding, padding + 16]).astype(np.uint))
+    cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
+        1, (255, 255, 0), 1)
+    # Print ref color
+    pt1 = tuple((p[0].ravel() + [padding, padding + 32]).astype(np.uint))
+    cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
+        1, (255, 255, 0), 1)
+    # Print distance
+    distance = 'd=%.4f' % (d,)
+    pt1 = tuple((p[0].ravel() + [padding, padding + 48]).astype(np.uint))
+    cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
+        1, (255, 255, 0), 1)
+
+    ref_color_index += 1
+
 '''img_trans[:, 0:1] *= 255 / 100
 img_trans[:, 1:3] += 128'''
-cv2.imshow("Image Transformed", img_trans.astype('uint8'))
+cv2.imshow("Image Transformed", image.astype('uint8'))
 cv2.waitKey(0)
