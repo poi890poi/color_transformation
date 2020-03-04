@@ -1,4 +1,5 @@
 import sys
+import argparse
 import math
 import operator
 from pprint import pprint
@@ -20,7 +21,6 @@ PATH_IN = './images/20200213_103542.jpg'
 PATH_IN = './images/color_checker.jpg'
 PATH_IN = './images/20200220_120820.jpg'
 PATH_IN = './images/20200220_120829.jpg'
-WIDTH_OUT = 800
 
 COLOR_SPACE = 'lab'
 REF_POINTS = {
@@ -52,54 +52,190 @@ REF_POINTS = {
     ],
 }
 
-class ShapeDetector:
-    def __init__(self):
-        pass
+parser = argparse.ArgumentParser(description='Auto color correction.')
+parser.add_argument('--debug', action='store_true',
+                    help='Display images for debug.')
+args = parser.parse_args()
+DEBUG = args.debug
+
+
+class ImageProcessing:
+    
+    DISPLAY_WIDTH = 1600
+    WORKING_WIDTH = 800
+
+    SHAPE_UNIDENTIFIED = 0
+    SHAPE_TRIANGLE = 1
+    SHAPE_SQUARE = 2
+    SHAPE_QUADRILATERAL = 3
+
+    def __init__(self, filename):
+        '''
+        Open source image from file.
+        '''
+        source = cv2.imread(filename)
+        source_height, source_width, *_ = source.shape
+        display = imutils.resize(source, width=self.DISPLAY_WIDTH)
+        display_height, display_width, *_ = display.shape
+        self.__source_width = source_width
+        self.__display_width = display_width
+        self.__img_source = display
 
     def detect(self, c):
         # initialize the shape name and approximate the contour
-        shape = "unidentified"
+        shape = self.SHAPE_UNIDENTIFIED
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.04 * peri, True)
         bounding = cv2.boundingRect(approx)
 
         # if the shape is a triangle, it will have 3 vertices
         if len(approx) == 3:
-            shape = "triangle"
-        # if the shape has 4 vertices, it is either a square or
-        # a rectangle
-        elif len(approx) == 4:
-            # compute the bounding box of the contour and use the
-            # bounding box to compute the aspect ratio
-            x, y, w, h = bounding
-            ar = w / float(h)
-            # a square will have an aspect ratio that is approximately
-            # equal to one, otherwise, the shape is a rectangle
-            shape = "square" if ar >= 0.95 and ar <= 1.05 else "rectangle"
-        # if the shape is a pentagon, it will have 5 vertices
-        elif len(approx) == 5:
-            shape = "pentagon"
-        # otherwise, we assume the shape is a circle
-        else:
-            shape = "circle"
+            shape = self.SHAPE_TRIANGLE
+        elif cv2.isContourConvex(approx):
+            # if the shape has 4 vertices, it is either a square or
+            # a rectangle
+            if len(approx) == 4:
+                # compute the bounding box of the contour and use the
+                # bounding box to compute the aspect ratio
+                polygon = np.array(approx[:, 0], dtype=np.float)
+                polygon = np.vstack((polygon, polygon[0]))
+                sides = np.linalg.norm(np.diff(polygon, axis=0), axis=1)
+                sides *= self.__length_factor
+                print(sides)
+                sides_dev = np.std(sides)
+                print('sides_dev={}'.format(sides_dev))
+                shape = (self.SHAPE_SQUARE 
+                    if sides_dev < 0.008 else self.SHAPE_QUADRILATERAL)
         # return the name of the shape
         return shape, approx, bounding
 
+    def normalize_source(self):
+        '''
+        Resize the source image to a normalized dimension so parameters for 
+        future algorithms can be fixed. This is crucial for filters with 
+        kernel matrices that are size-sentitive.
+        '''
+        source = self.__img_source
+        resized = imutils.resize(source, width=self.WORKING_WIDTH)
+        src_height, src_width, src_channels = source.shape
+        resized_height, resized_width, *_ = resized.shape
+        self.__source_factor = src_width / resized_width
+        self.__working_width = resized_width
+        self.__length_factor = 1 / resized_width
+        self.__area_factor = self.__length_factor ** 2
+        self.__img_resized = resized
+        cv2.imshow('Source', resized)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
-# load the image
-image = cv2.imread(PATH_IN)
-resized = imutils.resize(image, width=WIDTH_OUT)
-src_width, src_height, src_channels = image.shape
-dst_width, dst_height, *_ = resized.shape
-ratio = src_width / float(dst_width)
-cv2.imshow('Source', resized)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    @classmethod
+    def display(cls, caption, image):
+        cv2.imshow(caption, image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+    def render_contours(self, image, contours):
+        for c in contours:
+            M = cv2.moments(c)
+            if M['m00'] == 0: continue
+            cv2.drawContours(image, [c], -1, (0, 255, 0), 2)
+
+    def get_contours(self):
+        '''
+        1. Convert image to gray scale.
+        2. Apply threshold to get binary image.
+        3. Find contours.
+        '''
+        lab = cv2.cvtColor(self.__img_resized, cv2.COLOR_BGR2LAB)
+        gray, a, b = cv2.split(lab)
+        method, blockSize, C, *_ = (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 2)
+        blurred = cv2.GaussianBlur(gray, (9, 9), 0)
+        if DEBUG: self.display('Blurred', blurred)
+        binary = cv2.adaptiveThreshold(blurred, 255, method,
+                    cv2.THRESH_BINARY, blockSize, C)
+        if DEBUG: self.display('Binary', binary)
+
+        # Apply erosion to remove noises connected to the square.
+        kernel = np.ones((5,5),np.uint8)
+        binary = cv2.erode(binary, kernel)
+        if DEBUG: self.display('Eroded', binary)
+
+        contours = cv2.findContours(binary.copy(), cv2.RETR_LIST,
+            cv2.CHAIN_APPROX_TC89_KCOS)
+        contours = imutils.grab_contours(contours)
+        if DEBUG:
+            img_ = self.__img_resized.copy()
+            self.render_contours(img_, contours)
+            self.display('Contours', img_)
+        self.__contours = contours
+        return (contours, lab, binary)
+
+    def approximate_contours(self):
+        img_ = self.__img_resized.copy()
+        centers = list()
+        polygons = list()
+        for c in self.__contours:
+            M = cv2.moments(c)
+            if M['m00'] == 0: continue
+            shape, approx, bounding = self.detect(c)
+            if shape != self.SHAPE_SQUARE: continue
+            A = cv2.contourArea(approx) * self.__area_factor
+            print('area', A)
+            if A > 0.008 or A < 0.003: continue
+            polygons.append(approx)
+            M = cv2.moments(approx)
+            center = (M["m10"] / M["m00"], M["m01"] / M["m00"])
+            centers.append(center)
+            approx = approx.astype("int")
+            if DEBUG:
+                cv2.circle(img_, tuple(np.rint(center).astype(np.uint)), 
+                    5, (255, 255, 0), -1)
+                cv2.drawContours(img_, [approx], -1, (0, 255, 0), 2)
+        self.display('Squares', img_)
+        self.__shapes = np.array(polygons, dtype=np.float).reshape((-1, 4, 2))
+        self.__shape_centers = np.array(centers, dtype=np.float)
+
+    @property
+    def shapes(self):
+        return self.__shapes
+
+    @property
+    def shape_centers(self):
+        return self.__shape_centers
+
+    @property
+    def length_factor(self):
+        return self.__length_factor
+
+    @property
+    def working_width(self):
+        return self.__working_width
+
+    @property
+    def display_width(self):
+        return self.__display_width
+
+    @property
+    def source_width(self):
+        return self.__source_width
+
+    @property
+    def area_factor(self):
+        return self.__area_factor
+
+    @property
+    def image(self):
+        return self.__img_source
+
+# load the source image
+imgp = ImageProcessing(PATH_IN)
+imgp.normalize_source()
 
 # convert the resized image to grayscale, blur it slightly,
 # and threshold it
-lab = cv2.cvtColor(resized, cv2.COLOR_BGR2LAB)
-gray, a, b = cv2.split(lab)
+imgp.get_contours()
+
+imgp.approximate_contours()
 
 # Use different thresholding to get contours to deal with the problem
 # that different patches have different contrast.
@@ -119,63 +255,6 @@ CASCADES = [
     (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 17, 2),
     (cv2.ADAPTIVE_THRESH_MEAN_C, 17, 2),
 ]
-CASCADES = [
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 2),
-]
-contours = list()
-for c in CASCADES:
-    method, blockSize, C, *_ = c
-    blurred = cv2.GaussianBlur(gray, (9, 9), 0)
-    thresh = cv2.adaptiveThreshold(blurred, 255, method,
-                cv2.THRESH_BINARY, blockSize, C)
-    #cv2.imshow('Binary', thresh)
-    #cv2.waitKey(0)
-    #cv2.destroyAllWindows()
-
-    # find contours in the thresholded image and initialize the
-    # shape detector
-    clist = cv2.findContours(thresh.copy(), cv2.RETR_LIST,
-        cv2.CHAIN_APPROX_TC89_KCOS)
-    clist = imutils.grab_contours(clist)
-    contours += clist
-cv2.drawContours(resized, contours, -1, (0, 255, 0), 3)
-cv2.imshow('Contours', resized)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
-
-sd = ShapeDetector()
-
-plist = list() # List of the bounding box of the color patch
-anchors = list()
-
-# loop over the contours
-image_contours = np.copy(image)
-for c in contours:
-    # compute the center of the contour, then detect the name of the
-    # shape using only the contour
-    M = cv2.moments(c)
-    if M['m00'] == 0: continue
-    cX = int((M["m10"] / M["m00"]) * ratio)
-    cY = int((M["m01"] / M["m00"]) * ratio)
-    shape, poly, bounding = sd.detect(c)
-    # multiply the contour (x, y)-coordinates by the resize ratio,
-    # then draw the contours and the name of the shape on the image
-    c = c.astype("float")
-    c *= ratio
-    c = c.astype("int")
-    if shape != 'square': continue
-    x, y, w, h = bounding
-    area = w * h / float(dst_width) / float(dst_height)
-    if area < 0.005 or area > 0.035: continue
-    #anchors.append(poly)
-    anchors.append(np.mean(poly, axis=0))
-    plist.append(bounding)
-    cv2.drawContours(image_contours, [c], -1, (0, 255, 0), 2)
-    cv2.putText(image_contours, shape, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX,
-        0.5, (255, 255, 255), 2)
-# show the output image
-cv2.imshow("Contours", image_contours)
-cv2.waitKey(0)
 
 def rect_iou(bbox1, bbox2):
     '''
@@ -193,33 +272,8 @@ def rect_iou(bbox1, bbox2):
     iou = w * h / float(w1 * h1 + w2 * h2 - w * h)
     return iou
 
-# Merge overlapped contours
-for i in range(len(plist)):
-    for j in range(i+1, len(plist)):
-        iou = rect_iou(plist[i], plist[j])
-        if iou > 0.6:
-            plist[i] = (0, 0, 0, 0)
-new_list = list()
-for p in plist:
-    if p is not (0, 0, 0, 0):
-        new_list.append(p)
-plist = new_list
-del new_list
-
-# Sort contours
-plist = sorted(plist, key=operator.itemgetter(1))
-new_list = list()
-row_begin = 0
-while True:
-    row = plist[row_begin:row_begin+6]
-    if not row: break
-    row = sorted(row, key=operator.itemgetter(0))
-    print(row)
-    new_list += row
-    row_begin += 6
-plist = new_list
-del new_list
-pprint(plist)
+anchors = imgp.shape_centers.reshape(-1, 2) * imgp.length_factor
+print('anchors', anchors)
 
 def grids_integrity(params, vectors):
     z = 1
@@ -239,69 +293,83 @@ def grids_integrity(params, vectors):
     #print(d)
     return d
 
-anchors = (np.array(anchors, dtype=np.float).reshape(-1, 2)
-    / thresh.shape[1])
-print('anchors', anchors)
+rows = 4
+columns = 6
 params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
-grids_integrity(params, anchors.flatten())
+#grids_integrity(params, anchors.flatten())
 res_lsq = least_squares(grids_integrity, params, args=(
     anchors.flatten(),), jac='3-point', loss='soft_l1', tr_solver='exact')
 tmatrix = res_lsq.x.reshape((3, 3))
+#tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape((3, 3))
 tmatrix_inv = np.linalg.inv(tmatrix)
-print(tmatrix_inv)
+print('tmatrix_inv', tmatrix_inv)
 z = 1
-anchors = np.concatenate((anchors, 
-    np.full((anchors.shape[0], 1), z)), axis=1)
-anchors = anchors.dot(tmatrix.T)
+plist = imgp.shapes.reshape(-1, 2) * imgp.length_factor
+plist = np.concatenate((plist, 
+    np.full((plist.shape[0], 1), z)), axis=1)
+plist = plist.dot(tmatrix.T)
 #grids = (grids * thresh.shape[1]).astype(np.uint)
-print('grids aligned', anchors)
-x = np.sort(anchors[:, 0:1], axis=0)
-y = np.sort(anchors[:, 1:2], axis=0)
-kmx = KMeans(n_clusters=6).fit(x)
-kmy = KMeans(n_clusters=4).fit(y)
-print(kmx.labels_, kmy.labels_, kmx.cluster_centers_, kmy.cluster_centers_)
-grids_3d = np.ndarray(shape=(24, 3), dtype=np.float)
+print('grids aligned', plist)
+x = np.sort(plist[:, 0:1], axis=0)
+y = np.sort(plist[:, 1:2], axis=0)
+#kmx = KMeans(n_clusters=6).fit(x)
+#kmy = KMeans(n_clusters=4).fit(y)
+kmx = KMeans(n_clusters=columns*2).fit(x)
+kmy = KMeans(n_clusters=rows*2).fit(y)
+x_coords = np.sort(kmx.cluster_centers_, axis=0).reshape((-1, 2))
+y_coords = np.sort(kmy.cluster_centers_, axis=0).reshape((-1, 2))
+print('KMenas', y_coords, x_coords)
+
+'''grids_3d = np.ndarray(shape=(24, 3), dtype=np.float)
 centersx = np.sort(kmx.cluster_centers_, axis=0).ravel()
 centersy = np.sort(kmy.cluster_centers_, axis=0)
 grids_3d[:, 0] = np.tile(centersx, 4)
 grids_3d[:, 1] = np.tile(centersy, 6).ravel()
-grids_3d[:, 2] = np.average(anchors[:, 2:3])
-print(grids_3d)
-plist = np.array(plist)
-print(plist)
+grids_3d[:, 2] = np.average(anchors[:, 2:3])'''
+grids_3d = np.ndarray(shape=(columns*rows, 4, 3), dtype=np.float)
+x_coords = np.repeat(np.tile(x_coords, 2).reshape(1, -1, 2), rows, axis=0)
+y_coords = np.tile(np.repeat(y_coords, 2).reshape(1, -1, 4), columns)
+grids_3d[:, :, 0] = x_coords.reshape(-1, 4)
+grids_3d[:, :, 1] = y_coords.reshape(-1, 4)
+grids_3d[:, :, 2] = np.average(plist[:, 2:3])
+'''plist = np.array(plist)
 gw = int(np.average(plist[:, 2:3]) / 3)
 gh = int(np.average(plist[:, 2:4]) / 3)
 diag = np.array((gw, gh + 1))
-print(gw, gh)
-grids = (grids_3d.dot(tmatrix_inv.T) * thresh.shape[1])[:, 0:2]
+print(gw, gh)'''
+print('grids_3d', grids_3d)
+grids = (grids_3d.reshape(-1, 3).dot(tmatrix_inv.T))[:, 0:2]
+grids = grids.reshape(-1, 4, 2)
+print('grids', grids)
 
-image_grids = np.copy(image)
-for p in np.rint(grids * ratio).astype(np.uint):
-    #cv2.circle(image_grids, tuple(p), 30, (0, 255, 0), 2)
-    pt1 = tuple((p - diag * ratio).astype(np.uint))
-    pt2 = tuple((p + diag * ratio).astype(np.uint))
+color_patches = list()
+image_grids = np.copy(imgp.image)
+image_mask = np.zeros(imgp.image.shape, np.uint8)
+for p in np.rint(grids * imgp.display_width).astype(np.uint):
+    p = p.reshape(-1, 1, 2)
+    _ = p[2].copy()
+    p[2] = p[3].copy()
+    p[3] = _
+    color_patches.append(p)
+    cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
+    cv2.fillConvexPoly(image_mask, p, (255, 255, 255))
+    '''#cv2.circle(image_grids, tuple(p), 30, (0, 255, 0), 2)
+    pt1 = tuple((p - diag * imgp.length_factor).astype(np.uint))
+    pt2 = tuple((p + diag * imgp.length_factor).astype(np.uint))
     print(pt1, pt2)
-    cv2.rectangle(image_grids, pt1, pt2, (0, 255, 0), 2)
-grids -= diag
+    cv2.rectangle(image_grids, pt1, pt2, (0, 255, 0), 2)'''
+'''grids -= diag
 grids = np.concatenate((grids, 
     np.full((grids.shape[0], 1), gw * 2)), axis=1)
 grids = np.concatenate((grids, 
     np.full((grids.shape[0], 1), gh * 2)), axis=1)
 plist = grids.astype(np.uint)
-print(plist)
+print(plist)'''
 # show the output image
 cv2.imshow("Grids", image_grids)
 cv2.waitKey(0)
-
-# Convert to target color space
-if COLOR_SPACE == 'xyz':
-    cie = cv2.cvtColor(image, cv2.COLOR_BGR2XYZ)
-    cie_x, cie_y, cie_z = cv2.split(cie)
-elif COLOR_SPACE == 'lab':
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    lab_l, lab_a, lab_b = cv2.split(lab)
-else:
-    raise ValueError('Unknown color space')
+cv2.imshow("Mask", image_mask)
+cv2.waitKey(0)
 
 def color_distance(color_a, color_b):
     l1, a1, b1 = color_a
@@ -441,17 +509,24 @@ def nearest_color(sample):
             nearest = ref
     return nearest, d
 
+# Convert to target color space
+if COLOR_SPACE == 'xyz':
+    cie = cv2.cvtColor(imgp.image, cv2.COLOR_BGR2XYZ)
+    cie_x, cie_y, cie_z = cv2.split(cie)
+elif COLOR_SPACE == 'lab':
+    lab = cv2.cvtColor(imgp.image, cv2.COLOR_BGR2LAB)
+    lab_l, lab_a, lab_b = cv2.split(lab)
+else:
+    raise ValueError('Unknown color space')
+
+image = np.copy(imgp.image)
 samples = np.ndarray(shape=(24, 3), dtype=np.float)
 ref_color_index = 0
 padding = 0
-for p in plist:
-    bbox = np.array(p, dtype=np.float) * ratio
-    x, y, w, h = bbox.astype(np.uint)
-    r = (int(y+padding), int(y+h-padding*2-1), 
-        int(x+padding), int(x+w-padding*2-1))
-    if r[0] >= r[1] or r[2] >= r[3]:
-        r = (int(y), int(y+h-1), 
-            int(x), int(x+w-1))
+for p in color_patches:
+    print(p)
+    image_mask = np.zeros(imgp.image.shape[:2], np.uint8)
+    cv2.fillConvexPoly(image_mask, p, (255,))
     ''' # Use histogram instead of mean to calculate the XY values
     hist, xbins, ybins = np.histogram2d(
         cie_x[r[0]:r[1], r[2]:r[3]].ravel(),
@@ -462,9 +537,11 @@ for p in plist:
         x = np.average(cie_x[r[0]:r[1], r[2]:r[3]]) / 255
         y = np.average(cie_y[r[0]:r[1], r[2]:r[3]]) / 255
     elif COLOR_SPACE == 'lab':
-        x = np.average(lab_a[r[0]:r[1], r[2]:r[3]]) - 128
-        y = np.average(lab_b[r[0]:r[1], r[2]:r[3]]) - 128
-        z = np.average(lab_l[r[0]:r[1], r[2]:r[3]]) * 100 / 255
+        color_mean = cv2.mean(lab, image_mask)
+        print('mean', lab.shape, lab[20][20], color_mean)
+        z = color_mean[0] * 100 / 255
+        x = color_mean[1] - 128
+        y = color_mean[2] - 128
     else:
         raise ValueError('Unknown color space')
     cvalues = '%.2f, %.2f' % (x, y)
@@ -476,18 +553,18 @@ for p in plist:
     #print(x, y, cvalues)
     #print()
     # Print color values
-    pt1 = tuple((bbox[:2] + [padding, padding]).astype(np.uint))
-    pt2 = tuple((pt1 + bbox[-2:] - [padding*2-1, padding*2-1]).astype(np.uint))
-    cv2.rectangle(image, pt1, pt2, (0, 255, 0), 2)
+    cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
+    pt1 = tuple((p[0].ravel() + [padding, padding + 16]).astype(np.uint))
+    print(pt1)
     cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
         1, (255, 255, 0), 1)
     # Print ref color
-    pt1 = tuple((bbox[:2] + [padding, padding + 16]).astype(np.uint))
+    pt1 = tuple((p[0].ravel() + [padding, padding + 32]).astype(np.uint))
     cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
         1, (255, 255, 0), 1)
     # Print distance
     distance = 'd=%.4f' % (d,)
-    pt1 = tuple((bbox[:2] + [padding, padding + 32]).astype(np.uint))
+    pt1 = tuple((p[0].ravel() + [padding, padding + 48]).astype(np.uint))
     cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
         1, (255, 255, 0), 1)
 
@@ -495,7 +572,8 @@ for p in plist:
 
 def color_transform(tmatrix, colors_train, colors_target):
     colors_train = colors_train.reshape((24, 3))
-    #matrices = matrices.reshape((24, 3, 3))
+    #colors_train = np.concatenate((colors_train, 
+    #    np.full((colors_train.shape[0], 1), 1)), axis=1)
     tmatrix = tmatrix.reshape((3, 3))
     # einsum subscriptor for N vectors dot N matrices 'ij,ikj->ik'
     transformed = np.einsum('ij,kj->ik', colors_train, tmatrix)
@@ -503,6 +581,7 @@ def color_transform(tmatrix, colors_train, colors_target):
     #diff = transformed.flatten() - colors_target
     #d = np.linalg.norm(diff)
     d = 0.0
+    transformed = transformed[:, 0:3]
     target = colors_target.reshape((24, 3))
     #for i in range(24):
     #    d += color_distance(transformed[i], target[i])
@@ -519,11 +598,11 @@ ref_colors[:, 1:3] += 128
 samples[:, 0:1] *= 255 / 100
 samples[:, 1:3] += 128
 tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
+#tmatrix = np.array((1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1), dtype=np.float)
 res_lsq = least_squares(color_transform, tmatrix, args=(
     samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
     tr_solver='exact')
 tmatrix = res_lsq.x.reshape(3, 3)
-#tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
 print(res_lsq)
 #res = minimize(color_transform, samples.flatten(), method='Nelder-Mead', tol=1e-6)
 #print(res)
