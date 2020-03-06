@@ -11,6 +11,7 @@ from scipy.optimize import minimize, least_squares
 from scipy.stats import gaussian_kde
 from sklearn.neighbors import KernelDensity
 from sklearn.cluster import KMeans
+import skimage.transform as sk_xform
 
 # colormath is slower than my own implementation
 from colormath.color_objects import LabColor
@@ -274,10 +275,18 @@ class ImageProcessing:
         OR_VERTICAL = 0
         OR_HORIZONTAL = 1
 
-        def fit_line(vectors, group_n, orientation):
+        def fit_line(vectors, group_n, orientation, tmatrix):
             s_lines = list()
-            group_index = 3 if orientation==OR_VERTICAL else 4
-            c_ = vectors[:, group_index].reshape(-1, 1)
+            group_index = 0 if orientation==OR_VERTICAL else 1
+
+            c_ = vectors[:, 3:5]
+            c_ = np.hstack((c_, 
+                np.full((c_.shape[0], 1), 0)))
+            c_ = np.dot(c_, tmatrix.T)
+            c_ = c_[:, group_index].reshape(-1, 1)
+            #print(c_)
+            #down[:, -2:] = vertices[:, :2]
+
             km = KMeans(n_clusters=group_n).fit(np.concatenate((c_, c_), axis=1))
             for c in range(group_n):
                 d_ = vectors[km.labels_==c]
@@ -286,14 +295,15 @@ class ImageProcessing:
                 p_ = np.polyfit(x, y, 1)
                 s_lines.append((p_, x, y))
                 print(np.poly1d(p_), p_)
-            return s_lines
-            
-        p_down = fit_line(down, columns, OR_VERTICAL)
+            return s_lines, km.labels_
+
+        """p_down = fit_line(down, columns, OR_VERTICAL)
         p_up = fit_line(up, columns, OR_VERTICAL)
         p_left = fit_line(left, rows, OR_HORIZONTAL)
         p_right = fit_line(right, rows, OR_HORIZONTAL)
         assert (len(p_down)==columns and len(p_up)==columns 
             and len(p_left)==rows and len(p_right)==rows), 'Grids lines mismatch'
+        """
 
         def get_s_line(points):
             '''
@@ -357,18 +367,71 @@ class ImageProcessing:
                 cv2.circle(img_, tuple(c.astype(np.uint)), 8, (255, 255, 0), 2)
             self.display('Grids', img_)
 
-        '''params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
-        #grids_integrity(params, anchors.flatten())
-        res_lsq = least_squares(grids_integrity, params, args=(
-            anchors.flatten(),), jac='3-point', loss='soft_l1', tr_solver='exact',
-            verbose=lsq_verbose)'''
+        def fit_rect_3d(params, corners):
+            obj_points = np.array(
+                [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], dtype=np.float32)
+            tmatrix = params.reshape(3, 3)
+            vectors = np.copy(corners).reshape((-1, 2))
+            vectors = np.hstack((vectors, 
+                np.full((vectors.shape[0], 1), 0)))
+            transformed = np.einsum('ij,kj->ik', vectors, tmatrix)
+            #print(left_top, z, tmatrix, vectors, transformed, unity)
+            d = np.linalg.norm(transformed - obj_points)
+            print(transformed, d)
+            return d
 
-        raise
+        obj_points = np.array(
+            [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], dtype=np.float32).reshape(1, -1, 3)
+        h, w, *_ = self.__img_resized.shape
+        obj_points = np.array(
+            [[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float)
+        camera_matrix = np.zeros((3, 3), dtype=np.float)
+        #, flags=cv2.CV_CALIB_USE_INTRINSIC_GUESS
+        '''img_points = np.hstack((corners, 
+            np.full((corners.shape[0], 1), 0))).astype(np.float32)'''
+        print(obj_points.shape, corners)
+        xform = sk_xform.ProjectiveTransform()
+        ret = xform.estimate(corners, obj_points)
+        tmatrix = xform.params
+        tmatrix_inv = np.linalg.inv(tmatrix)
+        print(ret, tmatrix)
+
+        '''img_points = np.hstack((corners, 
+            np.full((corners.shape[0], 1), 0))).astype(np.float32)
+        for c in img_points:
+            print(c, c.dot(tmatrix.T))
+        raise'''
+
+        vertices = np.hstack((down[:, -2:], 
+            np.full((down.shape[0], 1), 0)))
+        vertices = np.dot(vertices, tmatrix.T)
+        print(vertices)
+        #down[:, -2:] = vertices[:, :2]
+        p_down, labels = fit_line(down, columns, OR_VERTICAL, tmatrix)
+        p_up, labels = fit_line(up, columns, OR_VERTICAL, tmatrix)
+        p_left, labels = fit_line(left, rows, OR_HORIZONTAL, tmatrix)
+        p_right, labels = fit_line(right, rows, OR_HORIZONTAL, tmatrix)
+        assert (len(p_down)==columns and len(p_up)==columns 
+            and len(p_left)==rows and len(p_right)==rows), 'Grids lines mismatch'
+
+        '''params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
+        res_lsq = least_squares(fit_rect_3d, params, args=(
+            corners.flatten() / self.__working_width,), jac='3-point', loss='soft_l1', tr_solver='exact',
+            verbose=1)
+        tmatrix = res_lsq.x.reshape((3, 3))
+        print('tmatrix', tmatrix)
+        tmatrix_inv = np.linalg.inv(tmatrix)
+        print('tmatrix_inv', tmatrix_inv)
+        print(corners, np.ones((corners.shape[0], 1)))
+        c_ = np.hstack((corners, 
+            np.full((corners.shape[0], 1), 100)))
+        print('corners', corners.astype(np.uint))
+        print('transformed', c_.dot(tmatrix.T))'''
 
         if DEBUG:
             img_ = self.__img_resized.copy()
             h, w, *_ = img_.shape
-            '''for p, sx, sy in p_down:
+            for p, sx, sy in p_down:
                 for i in range(len(sx)):
                     cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
                 a, b = p
@@ -385,8 +448,8 @@ class ImageProcessing:
                 pt1 = (int((y - b) / a), y)
                 y = h - 1
                 pt2 = (int((y - b) / a), y)
-                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)'''
-            for p, sx, sy in p_left[0:1]:
+                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
+            for p, sx, sy in p_left:
                 for i in range(len(sx)):
                     cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
                 a, b = p
@@ -395,7 +458,7 @@ class ImageProcessing:
                 x = w - 1
                 pt2 = (x, int(a * x + b))
                 cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
-            '''for p, sx, sy in p_right:
+            for p, sx, sy in p_right:
                 for i in range(len(sx)):
                     cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
                 a, b = p
@@ -403,7 +466,7 @@ class ImageProcessing:
                 pt1 = (x, int(a * x + b))
                 x = w - 1
                 pt2 = (x, int(a * x + b))
-                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)'''
+                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
             self.display('Grids', img_)
 
         #print('clustered directions', km.cluster_centers_[:, 0])
