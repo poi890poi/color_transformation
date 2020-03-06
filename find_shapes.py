@@ -8,6 +8,7 @@ import numpy as np
 import cv2
 import imutils
 from scipy.optimize import minimize, least_squares
+from scipy.stats import gaussian_kde
 from sklearn.neighbors import KernelDensity
 from sklearn.cluster import KMeans
 
@@ -17,11 +18,18 @@ from colormath.color_diff import delta_e_cie2000
 
 
 PATH_IN = './images/20200213_103455.jpg'
-#PATH_IN = './images/20200213_103542.jpg'
+PATH_IN = './images/20200213_103542.jpg'
 #PATH_IN = './images/color_checker.jpg'
 #PATH_IN = './images/20200220_120829.jpg'
 #PATH_IN = './images/20200220_120820.jpg'
+#PATH_IN = './images/20200303_114801.jpg'
+#PATH_IN = './images/20200303_114806.jpg'
+#PATH_IN = './images/20200303_114812.jpg' # poor
+#PATH_IN = './images/20200303_114815.jpg' # Need to fix Z
+PATH_IN = './images/20200303_114817.jpg' # Need to fix Z
 
+
+PI = math.pi
 COLOR_SPACE = 'lab'
 REF_POINTS = {
     'lab': [
@@ -57,6 +65,9 @@ parser.add_argument('--debug', action='store_true',
                     help='Display images for debug.')
 args = parser.parse_args()
 DEBUG = args.debug
+lsq_verbose = 1
+if DEBUG:
+    lsq_verbose = 2
 
 
 class ImageProcessing:
@@ -81,7 +92,7 @@ class ImageProcessing:
         self.__display_width = display_width
         self.__img_source = display
 
-    def detect(self, c):
+    def detect_shape(self, c):
         # initialize the shape name and approximate the contour
         shape = self.SHAPE_UNIDENTIFIED
         peri = cv2.arcLength(c, True)
@@ -156,7 +167,7 @@ class ImageProcessing:
         if DEBUG: self.display('Binary', binary)
 
         # Apply erosion to remove noises connected to the square.
-        kernel = np.ones((16,16),np.uint8)
+        kernel = np.ones((9,9),np.uint8)
         binary = cv2.erode(binary, kernel)
         if DEBUG: self.display('Eroded', binary)
 
@@ -177,11 +188,11 @@ class ImageProcessing:
         for c in self.__contours:
             M = cv2.moments(c)
             if M['m00'] == 0: continue
-            shape, approx, bounding = self.detect(c)
+            shape, approx, bounding = self.detect_shape(c)
             if shape != self.SHAPE_SQUARE: continue
             A = cv2.contourArea(approx) * self.__area_factor
             print('area', A)
-            if A > 0.016 or A < 0.003: continue
+            if A > 0.016 or A < 0.001: continue
             polygons.append(approx)
             M = cv2.moments(approx)
             center = (M["m10"] / M["m00"], M["m01"] / M["m00"])
@@ -194,6 +205,235 @@ class ImageProcessing:
         self.display('Squares', img_)
         self.__shapes = np.array(polygons, dtype=np.float).reshape((-1, 4, 2))
         self.__shape_centers = np.array(centers, dtype=np.float)
+
+    @classmethod
+    def render_vectors(cls, image, vectors):
+        colors = ((255, 0, 0), (0, 255, 0), (0, 0, 255), (128, 128, 0))
+        for v in vectors.astype(np.uint):
+            label, vx, vy, cx, cy = v
+            cv2.arrowedLine(image, (cx, cy), (cx+vx, cy+vy), colors[label], 
+                2, tipLength=0.2)
+
+    def align_grids(self, columns, rows):
+        N = columns * 2 + rows * 2
+        N = 4
+        vertices = self.shapes.reshape(-1, 8)
+        vectors = np.concatenate((vertices, vertices[:, 0:2]), axis=1)
+        vectors = vectors.reshape(-1, 5, 2)
+        vectors = np.diff(vectors, axis=1)
+        vectors = vectors.reshape(-1, 2)
+        vertices = vertices.reshape(-1, 2)
+        directions = np.arctan2(vectors[:, 0], vectors[:, 1])
+        pprint(directions)
+        #kernel = gaussian_kde(directions)
+        #print(kernel.d, kernel.n, kernel.neff, kernel.factor, kernel.covariance)
+        directions = directions.reshape(-1, 1)
+        print('directions', directions[:, 0])
+        km = KMeans(n_clusters=N).fit(np.concatenate((directions, directions), axis=1))
+        print('clustered directions', km.cluster_centers_[:, 0])
+        print('labels', km.labels_)
+        vectors_clustered = np.ndarray((km.cluster_centers_.shape[0], 2))
+        vectors_clustered[:, 0] = np.cos(km.cluster_centers_[:, 0])
+        vectors_clustered[:, 1] = np.sin(km.cluster_centers_[:, 0])
+        vectors = np.concatenate((km.labels_.reshape(-1, 1), vectors, vertices), axis=1)
+        '''
+        Output grid vectors are in the format of 
+            [[label, vx, vy, cx, cy],... ],
+        where (cx, cy) is the starting point and (vx, vy) is the vector.
+        '''
+        #vectors = np.sort(vectors, axis=0)
+        directions = directions.ravel()
+        pprint(vectors)
+        print(directions.shape, vectors.shape)
+
+        down = vectors[(directions <= PI / 4) & (directions > -PI / 4)]
+        up = vectors[(directions <= -PI * 3/4) | (directions > PI *3/4)]
+        left = vectors[(directions <= -PI / 4) & (directions > -PI * 3/4)]
+        right = vectors[(directions <= PI * 3/4) & (directions > PI / 4)]
+
+        '''names = 'label, vx, vy, cx, cy'
+        formats = 'u4, f8, f8, f8, f8'
+        down = np.core.records.fromarrays(down.transpose(), 
+            names=names, formats=formats)
+        up = np.core.records.fromarrays(up.transpose(), 
+            names=names, formats=formats)
+        left = np.core.records.fromarrays(left.transpose(), 
+            names=names, formats=formats)
+        right = np.core.records.fromarrays(right.transpose(), 
+            names=names, formats=formats)
+        np.sort(down, axis=0, order='cx')
+        np.argsort(up, axis=0, order='cx')
+        np.sort(left, axis=0, order='cy')
+        np.argsort(right, axis=0, order='cy')'''
+
+        if DEBUG:
+            img_ = self.__img_resized.copy()
+            self.render_vectors(img_, vectors)
+            self.display('Vectors', img_)
+
+        OR_VERTICAL = 0
+        OR_HORIZONTAL = 1
+
+        def fit_line(vectors, group_n, orientation):
+            s_lines = list()
+            group_index = 3 if orientation==OR_VERTICAL else 4
+            c_ = vectors[:, group_index].reshape(-1, 1)
+            km = KMeans(n_clusters=group_n).fit(np.concatenate((c_, c_), axis=1))
+            for c in range(group_n):
+                d_ = vectors[km.labels_==c]
+                x = np.concatenate((d_[:, 3], d_[:, 3] + d_[:, 1]), axis=0)
+                y = np.concatenate((d_[:, 4], d_[:, 4] + d_[:, 2]), axis=0)
+                p_ = np.polyfit(x, y, 1)
+                s_lines.append((p_, x, y))
+                print(np.poly1d(p_), p_)
+            return s_lines
+            
+        p_down = fit_line(down, columns, OR_VERTICAL)
+        p_up = fit_line(up, columns, OR_VERTICAL)
+        p_left = fit_line(left, rows, OR_HORIZONTAL)
+        p_right = fit_line(right, rows, OR_HORIZONTAL)
+        assert (len(p_down)==columns and len(p_up)==columns 
+            and len(p_left)==rows and len(p_right)==rows), 'Grids lines mismatch'
+
+        def get_s_line(points):
+            '''
+            Use points to find a straight line as polynomial function.
+
+            Input vectors are in the format of 
+                [[label, vx, vy, cx, cy],... ],
+            where (cx, cy) is the starting point and (vx, vy) is the vector.
+            '''
+            d_ = points.reshape(1, -1)
+            x = np.concatenate((d_[:, 3], d_[:, 3] + d_[:, 1]), axis=0)
+            y = np.concatenate((d_[:, 4], d_[:, 4] + d_[:, 2]), axis=0)
+            p_ = np.polyfit(x, y, 1)
+            return p_
+
+        vertical = np.vstack((down, up))
+        s_left = get_s_line(vertical[np.argmin(vertical[:, 3])])
+        s_right = get_s_line(vertical[np.argmax(vertical[:, 3])])
+        horizontal = np.vstack((left, right))
+        s_top = get_s_line(horizontal[np.argmin(horizontal[:, 4])])
+        s_bottom = get_s_line(horizontal[np.argmax(horizontal[:, 4])])
+
+        def s_line_intersect(p1, p2):
+            '''
+            Take polynomial coefficients of 2 straight lines and find the 
+            intersection.
+            '''
+            a1, b1 = p1
+            a2, b2 = p2
+            x = -(b1 - b2) / (a1 - a2)
+            y = a1 * x + b1
+            return np.array((x, y))
+
+        pt1 = s_line_intersect(s_left, s_top)
+        pt2 = s_line_intersect(s_right, s_top)
+        pt3 = s_line_intersect(s_right, s_bottom)
+        pt4 = s_line_intersect(s_left, s_bottom)
+        corners = np.vstack((pt1, pt2, pt3, pt4))
+
+        def draw_straight_line(image, poly):
+            a, b = poly
+            h, w, *_ = image.shape
+            x = 0
+            pt1 = (x, int(a * x + b))
+            x = w - 1
+            pt2 = (x, int(a * x + b))
+            cv2.line(image, pt1, pt2, (0, 255, 0), 2)
+            y = 0
+            pt1 = (int((y - b) / a), y)
+            y = h - 1
+            pt2 = (int((y - b) / a), y)
+            cv2.line(image, pt1, pt2, (0, 255, 0), 2)
+
+        if DEBUG:
+            img_ = self.__img_resized.copy()
+            draw_straight_line(img_, s_left)
+            draw_straight_line(img_, s_right)
+            draw_straight_line(img_, s_top)
+            draw_straight_line(img_, s_bottom)
+            for c in corners:
+                cv2.circle(img_, tuple(c.astype(np.uint)), 8, (255, 255, 0), 2)
+            self.display('Grids', img_)
+
+        '''params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
+        #grids_integrity(params, anchors.flatten())
+        res_lsq = least_squares(grids_integrity, params, args=(
+            anchors.flatten(),), jac='3-point', loss='soft_l1', tr_solver='exact',
+            verbose=lsq_verbose)'''
+
+        raise
+
+        if DEBUG:
+            img_ = self.__img_resized.copy()
+            h, w, *_ = img_.shape
+            '''for p, sx, sy in p_down:
+                for i in range(len(sx)):
+                    cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
+                a, b = p
+                y = 0
+                pt1 = (int((y - b) / a), y)
+                y = h - 1
+                pt2 = (int((y - b) / a), y)
+                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
+            for p, sx, sy in p_up:
+                for i in range(len(sx)):
+                    cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
+                a, b = p
+                y = 0
+                pt1 = (int((y - b) / a), y)
+                y = h - 1
+                pt2 = (int((y - b) / a), y)
+                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)'''
+            for p, sx, sy in p_left[0:1]:
+                for i in range(len(sx)):
+                    cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
+                a, b = p
+                x = 0
+                pt1 = (x, int(a * x + b))
+                x = w - 1
+                pt2 = (x, int(a * x + b))
+                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
+            '''for p, sx, sy in p_right:
+                for i in range(len(sx)):
+                    cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
+                a, b = p
+                x = 0
+                pt1 = (x, int(a * x + b))
+                x = w - 1
+                pt2 = (x, int(a * x + b))
+                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)'''
+            self.display('Grids', img_)
+
+        #print('clustered directions', km.cluster_centers_[:, 0])
+        #print('labels', km.labels_)
+        raise
+
+        grids = np.ndarray((N, 4), dtype=np.float)
+        for i in range(N):
+            grids[i] = np.mean(vectors[vectors[:, 0]==i], axis=0)[1:]
+            print(i, grids[i])
+
+        def vanishing_points(params, grids):
+            grids = np.copy(grids.reshape(-1, 4))
+            centers = grids[:, :2].reshape(-1, 2)
+            vectors = grids[:, 2:4].reshape(-1, 2)
+            vectors[:, 0] *= params
+            vectors[:, 1] *= params
+            vanishing_points = centers + vectors
+            km = KMeans(n_clusters=2).fit(vanishing_points)
+            print(km.inertia_, vanishing_points)
+            return km.inertia_
+
+        params = np.ones(shape=(N,), dtype=np.float)
+        res_lsq = least_squares(vanishing_points, params, args=(
+            grids.flatten(),), jac='3-point', loss='soft_l1', 
+            tr_solver='exact', max_nfev=9000, xtol=None, verbose=1)
+        print(res_lsq.x)
+        vanishing_points(res_lsq.x, grids)
+
+        raise
 
     @property
     def shapes(self):
@@ -236,6 +476,7 @@ imgp.normalize_source()
 imgp.get_contours()
 
 imgp.approximate_contours()
+imgp.align_grids(6, 4)
 
 # Use different thresholding to get contours to deal with the problem
 # that different patches have different contrast.
@@ -298,7 +539,8 @@ columns = 6
 params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
 #grids_integrity(params, anchors.flatten())
 res_lsq = least_squares(grids_integrity, params, args=(
-    anchors.flatten(),), jac='3-point', loss='soft_l1', tr_solver='exact')
+    anchors.flatten(),), jac='3-point', loss='soft_l1', tr_solver='exact',
+    verbose=lsq_verbose)
 tmatrix = res_lsq.x.reshape((3, 3))
 #tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape((3, 3))
 tmatrix_inv = np.linalg.inv(tmatrix)
@@ -318,7 +560,7 @@ kmx = KMeans(n_clusters=columns*2).fit(x)
 kmy = KMeans(n_clusters=rows*2).fit(y)
 x_coords = np.sort(kmx.cluster_centers_, axis=0).reshape((-1, 2))
 y_coords = np.sort(kmy.cluster_centers_, axis=0).reshape((-1, 2))
-print('KMenas', y_coords, x_coords)
+print('KMeans', y_coords, x_coords)
 
 '''grids_3d = np.ndarray(shape=(24, 3), dtype=np.float)
 centersx = np.sort(kmx.cluster_centers_, axis=0).ravel()
@@ -640,7 +882,8 @@ tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
 #tmatrix = np.array((1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1), dtype=np.float)
 res_lsq = least_squares(color_transform, tmatrix, args=(
     samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-    tr_solver='exact', ftol=None, xtol=1e-12, gtol=None, max_nfev=9000)
+    tr_solver='exact', ftol=None, xtol=1e-12, gtol=None, max_nfev=9000,
+    verbose=lsq_verbose)
 tmatrix = res_lsq.x.reshape(3, 3)
 #tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
 print(res_lsq)
