@@ -19,13 +19,13 @@ from colormath.color_diff import delta_e_cie2000
 
 
 PATH_IN = './images/20200213_103455.jpg'
-PATH_IN = './images/20200213_103542.jpg' # noise rectangles
-#PATH_IN = './images/color_checker.jpg'
-PATH_IN = './images/20200220_120829.jpg' # yellowish
-PATH_IN = './images/20200220_120820.jpg' # blueish
-PATH_IN = './images/20200303_114801.jpg'
+#PATH_IN = './images/20200213_103542.jpg' # noise rectangles
+PATH_IN = './images/color_checker.jpg'
+#PATH_IN = './images/20200220_120829.jpg' # yellowish
+#PATH_IN = './images/20200220_120820.jpg' # blueish
+#PATH_IN = './images/20200303_114801.jpg'
 #PATH_IN = './images/20200303_114806.jpg'
-#PATH_IN = './images/20200303_114812.jpg' # poor
+PATH_IN = './images/20200303_114812.jpg' # poor
 #PATH_IN = './images/20200303_114815.jpg' # Need to fix Z
 #PATH_IN = './images/20200303_114817.jpg' # Need to fix Z
 
@@ -193,7 +193,7 @@ class ImageProcessing:
             if shape != self.SHAPE_SQUARE: continue
             A = cv2.contourArea(approx) * self.__area_factor
             print('area', A)
-            if A > 0.016 or A < 0.001: continue
+            if A > 0.02 or A < 0.001: continue
             polygons.append(approx)
             M = cv2.moments(approx)
             center = (M["m10"] / M["m00"], M["m01"] / M["m00"])
@@ -332,17 +332,22 @@ class ImageProcessing:
             d_ = points.reshape(1, -1)
             x = np.concatenate((d_[:, 3], d_[:, 3] + d_[:, 1]), axis=0)
             y = np.concatenate((d_[:, 4], d_[:, 4] + d_[:, 2]), axis=0)
-            if d_[0][1] == 0:
-                p_ = (d_[0][3], None)
+            print('X DEV', x, np.std(x))
+            if np.std(x) < 1:
+                p_ = (np.mean(x), None)
             else:
                 p_ = np.polyfit(x, y, 1)
             return p_
 
         vertical = np.vstack((down, up))
+        print('LEFT')
         s_left = get_straight(vertical[np.argmin(vertical[:, 3])])
+        print('RIGHT')
         s_right = get_straight(vertical[np.argmax(vertical[:, 3])])
         horizontal = np.vstack((left, right))
+        print('TOP')
         s_top = get_straight(horizontal[np.argmin(horizontal[:, 4])])
+        print('BOTTOM')
         s_bottom = get_straight(horizontal[np.argmax(horizontal[:, 4])])
 
         def s_line_intersect(p1, p2):
@@ -353,7 +358,7 @@ class ImageProcessing:
             a1, b1 = p1
             a2, b2 = p2
             if b1 is None and b2 is None:
-                assert True, 'Parallel lines do not intersect'
+                assert False, 'Parallel lines do not intersect, {}, {}'.format(p1, p2)
             elif b1 is None:
                 x = a1
                 y = a2 * x + b2
@@ -452,8 +457,9 @@ class ImageProcessing:
                 d_ = vectors[km.labels_==c]
                 x = np.concatenate((d_[:, 3], d_[:, 3] + d_[:, 1]), axis=0)
                 y = np.concatenate((d_[:, 4], d_[:, 4] + d_[:, 2]), axis=0)
-                if d_[0][1] == 0:
-                    p_ = (d_[0][3], None)
+                print('X DEV', x, np.std(x))
+                if np.std(x) < 1:
+                    p_ = (np.mean(x), None)
                 else:
                     p_ = np.polyfit(x, y, 1)
                 grid_lines.append(p_)
@@ -462,6 +468,13 @@ class ImageProcessing:
                     print(np.poly1d(p_), p_)
                 except TypeError:
                     print(p_)
+
+                if False:
+                    img_ = self.__img_resized.copy()
+                    self.draw_straight_line(img_, p_)
+                    self.render_vectors(img_, d_)
+                    self.display('Grid Line', img_)
+
             return grid_lines, aligned_vectors
 
         vertices = np.hstack((down[:, -2:], 
@@ -469,10 +482,14 @@ class ImageProcessing:
         vertices = np.dot(vertices, tmatrix.T)
         print(vertices)
         #down[:, -2:] = vertices[:, :2]
-        p_down, *_ = fit_grid_lines(down, down[:, 3:5], columns, GRID_MERIDIAN, tmatrix)
-        p_up, *_ = fit_grid_lines(up, up[:, 3:5], columns, GRID_MERIDIAN, tmatrix)
-        p_left, *_ = fit_grid_lines(left, left[:, 3:5], rows, GRID_PARALLEL, tmatrix)
-        p_right, *_ = fit_grid_lines(right, right[:, 3:5], rows, GRID_PARALLEL, tmatrix)
+        p_down, v = fit_grid_lines(down, down[:, 3:5], columns, GRID_MERIDIAN, tmatrix)
+        print('p_down', p_down)
+        pprint(v)
+        p_up, v = fit_grid_lines(up, up[:, 3:5], columns, GRID_MERIDIAN, tmatrix)
+        print('p_up', p_up)
+        pprint(v)
+        p_left, v = fit_grid_lines(left, left[:, 3:5], rows, GRID_PARALLEL, tmatrix)
+        p_right, v = fit_grid_lines(right, right[:, 3:5], rows, GRID_PARALLEL, tmatrix)
         assert (len(p_down)==columns and len(p_up)==columns 
             and len(p_left)==rows and len(p_right)==rows), 'Error fitting grids lines'
 
@@ -481,10 +498,7 @@ class ImageProcessing:
         meridians_sort = np.copy(meridians)
         m_ = meridians_sort[meridians_sort[:, 1]==None]
         meridians_sort[meridians_sort[:, 1]==None] = np.flip(meridians_sort[meridians_sort[:, 1]==None], axis=1)
-        print(meridians_sort[meridians_sort[:, 0]==None][:, 0])
         meridians_sort[meridians_sort==None] = -1
-        print(meridians_sort)
-        print(meridians_sort[:, 0]/meridians_sort[:, 1])
         meridians = meridians[np.argsort(meridians_sort[:, 0]/meridians_sort[:, 1])]
         parallels = parallels[np.argsort(parallels[:, 1])]
         intersects = list()
@@ -512,7 +526,6 @@ class ImageProcessing:
             h, w, *_ = img_.shape
             for p in meridians:
                 a, b = p
-                print(a, b, (b == None))
                 if b is None:
                     x = int(a)
                     pt1 = (x, 0)
@@ -525,7 +538,6 @@ class ImageProcessing:
                 cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
             for p in parallels:
                 a, b = p
-                print(a, b, (b is None))
                 if b is None:
                     x = int(a)
                     pt1 = (x, 0)
@@ -538,7 +550,6 @@ class ImageProcessing:
                 cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
             i = 0
             for intersect in intersects:
-                print(intersect)
                 try:
                     cv2.circle(img_, tuple(intersect), 4, (0, 255, 255), 2)
                     cv2.putText(img_, '{}'.format(i), tuple(intersect), 
