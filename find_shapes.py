@@ -19,11 +19,11 @@ from colormath.color_diff import delta_e_cie2000
 
 
 PATH_IN = './images/20200213_103455.jpg'
-PATH_IN = './images/20200213_103542.jpg'
+PATH_IN = './images/20200213_103542.jpg' # noise rectangles
 #PATH_IN = './images/color_checker.jpg'
-#PATH_IN = './images/20200220_120829.jpg'
-#PATH_IN = './images/20200220_120820.jpg'
-#PATH_IN = './images/20200303_114801.jpg'
+PATH_IN = './images/20200220_120829.jpg' # yellowish
+PATH_IN = './images/20200220_120820.jpg' # blueish
+PATH_IN = './images/20200303_114801.jpg'
 #PATH_IN = './images/20200303_114806.jpg'
 #PATH_IN = './images/20200303_114812.jpg' # poor
 #PATH_IN = './images/20200303_114815.jpg' # Need to fix Z
