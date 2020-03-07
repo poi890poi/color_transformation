@@ -272,31 +272,6 @@ class ImageProcessing:
             self.render_vectors(img_, vectors)
             self.display('Vectors', img_)
 
-        OR_VERTICAL = 0
-        OR_HORIZONTAL = 1
-
-        def fit_line(vectors, group_n, orientation, tmatrix):
-            s_lines = list()
-            group_index = 0 if orientation==OR_VERTICAL else 1
-
-            c_ = vectors[:, 3:5]
-            c_ = np.hstack((c_, 
-                np.full((c_.shape[0], 1), 0)))
-            c_ = np.dot(c_, tmatrix.T)
-            c_ = c_[:, group_index].reshape(-1, 1)
-            #print(c_)
-            #down[:, -2:] = vertices[:, :2]
-
-            km = KMeans(n_clusters=group_n).fit(np.concatenate((c_, c_), axis=1))
-            for c in range(group_n):
-                d_ = vectors[km.labels_==c]
-                x = np.concatenate((d_[:, 3], d_[:, 3] + d_[:, 1]), axis=0)
-                y = np.concatenate((d_[:, 4], d_[:, 4] + d_[:, 2]), axis=0)
-                p_ = np.polyfit(x, y, 1)
-                s_lines.append((p_, x, y))
-                print(np.poly1d(p_), p_)
-            return s_lines, km.labels_
-
         """p_down = fit_line(down, columns, OR_VERTICAL)
         p_up = fit_line(up, columns, OR_VERTICAL)
         p_left = fit_line(left, rows, OR_HORIZONTAL)
@@ -402,17 +377,57 @@ class ImageProcessing:
             print(c, c.dot(tmatrix.T))
         raise'''
 
+        GRID_MERIDIAN = 0
+        GRID_PARALLEL = 1
+
+        def fit_grid_lines(vectors, group_data, group_n, orientation, tmatrix):
+            '''
+            Use aligned points in 2D to group vectors into clusters of grid 
+            lines.
+
+            vectors - Vectors of shape (N, 5) in the format of (label, vx, vy, cx, cy)
+            group_data - Data for clustering of shape (N, 2) as points in 2D
+            group_n - Number of grid lines to fit
+            orientation - Meridian or parallel
+            tmatrix - Projective transformation matrix to align group_data
+
+            Return grid_lines as polynomial coefficients of the grid lines.
+            '''
+            grid_lines = list()
+            aligned_vectors = list()
+            group_index = 0 if orientation==GRID_MERIDIAN else 1
+
+            c_ = group_data
+            c_ = np.hstack((c_, 
+                np.full((c_.shape[0], 1), 0)))
+            c_ = np.dot(c_, tmatrix.T)
+            c_ = c_[:, group_index].reshape(-1, 1)
+
+            km = KMeans(n_clusters=group_n).fit(np.concatenate((c_, c_), axis=1))
+            for c in range(group_n):
+                d_ = vectors[km.labels_==c]
+                x = np.concatenate((d_[:, 3], d_[:, 3] + d_[:, 1]), axis=0)
+                y = np.concatenate((d_[:, 4], d_[:, 4] + d_[:, 2]), axis=0)
+                p_ = np.polyfit(x, y, 1)
+                grid_lines.append(p_)
+                aligned_vectors.append(d_)
+                print(np.poly1d(p_), p_)
+            return grid_lines, aligned_vectors
+
         vertices = np.hstack((down[:, -2:], 
             np.full((down.shape[0], 1), 0)))
         vertices = np.dot(vertices, tmatrix.T)
         print(vertices)
         #down[:, -2:] = vertices[:, :2]
-        p_down, labels = fit_line(down, columns, OR_VERTICAL, tmatrix)
-        p_up, labels = fit_line(up, columns, OR_VERTICAL, tmatrix)
-        p_left, labels = fit_line(left, rows, OR_HORIZONTAL, tmatrix)
-        p_right, labels = fit_line(right, rows, OR_HORIZONTAL, tmatrix)
+        p_down, *_ = fit_grid_lines(down, down[:, 3:5], columns, GRID_MERIDIAN, tmatrix)
+        p_up, *_ = fit_grid_lines(up, up[:, 3:5], columns, GRID_MERIDIAN, tmatrix)
+        p_left, *_ = fit_grid_lines(left, left[:, 3:5], rows, GRID_PARALLEL, tmatrix)
+        p_right, *_ = fit_grid_lines(right, right[:, 3:5], rows, GRID_PARALLEL, tmatrix)
         assert (len(p_down)==columns and len(p_up)==columns 
-            and len(p_left)==rows and len(p_right)==rows), 'Grids lines mismatch'
+            and len(p_left)==rows and len(p_right)==rows), 'Error fitting grids lines'
+
+        meridians = np.vstack((p_down, p_up))
+        parallels = np.vstack((p_left, p_right))
 
         '''params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
         res_lsq = least_squares(fit_rect_3d, params, args=(
@@ -431,36 +446,14 @@ class ImageProcessing:
         if DEBUG:
             img_ = self.__img_resized.copy()
             h, w, *_ = img_.shape
-            for p, sx, sy in p_down:
-                for i in range(len(sx)):
-                    cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
+            for p in meridians:
                 a, b = p
                 y = 0
                 pt1 = (int((y - b) / a), y)
                 y = h - 1
                 pt2 = (int((y - b) / a), y)
                 cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
-            for p, sx, sy in p_up:
-                for i in range(len(sx)):
-                    cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
-                a, b = p
-                y = 0
-                pt1 = (int((y - b) / a), y)
-                y = h - 1
-                pt2 = (int((y - b) / a), y)
-                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
-            for p, sx, sy in p_left:
-                for i in range(len(sx)):
-                    cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
-                a, b = p
-                x = 0
-                pt1 = (x, int(a * x + b))
-                x = w - 1
-                pt2 = (x, int(a * x + b))
-                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
-            for p, sx, sy in p_right:
-                for i in range(len(sx)):
-                    cv2.circle(img_, (int(sx[i]), int(sy[i])), 4, (255, 255, 0), 2)
+            for p in parallels:
                 a, b = p
                 x = 0
                 pt1 = (x, int(a * x + b))
