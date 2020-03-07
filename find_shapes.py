@@ -27,7 +27,7 @@ PATH_IN = './images/20200213_103542.jpg'
 #PATH_IN = './images/20200303_114806.jpg'
 #PATH_IN = './images/20200303_114812.jpg' # poor
 #PATH_IN = './images/20200303_114815.jpg' # Need to fix Z
-PATH_IN = './images/20200303_114817.jpg' # Need to fix Z
+#PATH_IN = './images/20200303_114817.jpg' # Need to fix Z
 
 
 PI = math.pi
@@ -215,9 +215,29 @@ class ImageProcessing:
             cv2.arrowedLine(image, (cx, cy), (cx+vx, cy+vy), colors[label], 
                 2, tipLength=0.2)
 
-    def align_grids(self, columns, rows):
-        N = columns * 2 + rows * 2
-        N = 4
+    @classmethod
+    def draw_straight_line(cls, image, poly):
+        a, b = poly
+        h, w, *_ = image.shape
+        if b is None:
+            pt1 = (int(a), 0)
+            pt2 = (int(a), h - 1)
+        else:
+            x = 0
+            pt1 = (x, int(a * x + b))
+            x = w - 1
+            pt2 = (x, int(a * x + b))
+            cv2.line(image, pt1, pt2, (0, 255, 0), 2)
+            y = 0
+            pt1 = (int((y - b) / a), y)
+            y = h - 1
+            pt2 = (int((y - b) / a), y)
+        try:
+            cv2.line(image, pt1, pt2, (0, 255, 0), 2)
+        except OverflowError:
+            print(image.shape, a, b, pt1, pt2)
+
+    def detect_grids(self, columns, rows):
         vertices = self.shapes.reshape(-1, 8)
         vectors = np.concatenate((vertices, vertices[:, 0:2]), axis=1)
         vectors = vectors.reshape(-1, 5, 2)
@@ -230,13 +250,30 @@ class ImageProcessing:
         #print(kernel.d, kernel.n, kernel.neff, kernel.factor, kernel.covariance)
         directions = directions.reshape(-1, 1)
         print('directions', directions[:, 0])
-        km = KMeans(n_clusters=N).fit(np.concatenate((directions, directions), axis=1))
+        km = KMeans(n_clusters=4).fit(vectors[:, 0:2])
         print('clustered directions', km.cluster_centers_[:, 0])
         print('labels', km.labels_)
         vectors_clustered = np.ndarray((km.cluster_centers_.shape[0], 2))
         vectors_clustered[:, 0] = np.cos(km.cluster_centers_[:, 0])
         vectors_clustered[:, 1] = np.sin(km.cluster_centers_[:, 0])
         vectors = np.concatenate((km.labels_.reshape(-1, 1), vectors, vertices), axis=1)
+        print(vectors.shape)
+
+        for l in range(4):
+            v = vectors[vectors[:, 0]==l]
+            print(l)
+            print(np.mean(vectors[vectors[:, 0]==l], axis=0)[1:3])
+            direction = np.arctan2(*np.mean(vectors[vectors[:, 0]==l], axis=0)[1:3])
+            print(direction)
+            if (direction <= PI / 4) and (direction > -PI / 4):
+                down = l
+            elif (direction <= -PI * 3/4) or (direction > PI * 3/4):
+                up = l
+            elif (direction <= -PI / 4) and (direction > -PI * 3/4):
+                left = l
+            elif (direction <= PI * 3/4) or (direction > PI / 4):
+                right = l
+
         '''
         Output grid vectors are in the format of 
             [[label, vx, vy, cx, cy],... ],
@@ -247,10 +284,14 @@ class ImageProcessing:
         pprint(vectors)
         print(directions.shape, vectors.shape)
 
-        down = vectors[(directions <= PI / 4) & (directions > -PI / 4)]
-        up = vectors[(directions <= -PI * 3/4) | (directions > PI *3/4)]
-        left = vectors[(directions <= -PI / 4) & (directions > -PI * 3/4)]
-        right = vectors[(directions <= PI * 3/4) & (directions > PI / 4)]
+        down = vectors[vectors[:, 0]==down]
+        up = vectors[vectors[:, 0]==up]
+        left = vectors[vectors[:, 0]==left]
+        right = vectors[vectors[:, 0]==right]
+        print('down', down)
+        print('up', up)
+        print('left', left)
+        print('right', right)
 
         '''names = 'label, vx, vy, cx, cy'
         formats = 'u4, f8, f8, f8, f8'
@@ -280,7 +321,7 @@ class ImageProcessing:
             and len(p_left)==rows and len(p_right)==rows), 'Grids lines mismatch'
         """
 
-        def get_s_line(points):
+        def get_straight(points):
             '''
             Use points to find a straight line as polynomial function.
 
@@ -291,15 +332,18 @@ class ImageProcessing:
             d_ = points.reshape(1, -1)
             x = np.concatenate((d_[:, 3], d_[:, 3] + d_[:, 1]), axis=0)
             y = np.concatenate((d_[:, 4], d_[:, 4] + d_[:, 2]), axis=0)
-            p_ = np.polyfit(x, y, 1)
+            if d_[0][1] == 0:
+                p_ = (d_[0][3], None)
+            else:
+                p_ = np.polyfit(x, y, 1)
             return p_
 
         vertical = np.vstack((down, up))
-        s_left = get_s_line(vertical[np.argmin(vertical[:, 3])])
-        s_right = get_s_line(vertical[np.argmax(vertical[:, 3])])
+        s_left = get_straight(vertical[np.argmin(vertical[:, 3])])
+        s_right = get_straight(vertical[np.argmax(vertical[:, 3])])
         horizontal = np.vstack((left, right))
-        s_top = get_s_line(horizontal[np.argmin(horizontal[:, 4])])
-        s_bottom = get_s_line(horizontal[np.argmax(horizontal[:, 4])])
+        s_top = get_straight(horizontal[np.argmin(horizontal[:, 4])])
+        s_bottom = get_straight(horizontal[np.argmax(horizontal[:, 4])])
 
         def s_line_intersect(p1, p2):
             '''
@@ -308,8 +352,18 @@ class ImageProcessing:
             '''
             a1, b1 = p1
             a2, b2 = p2
-            x = -(b1 - b2) / (a1 - a2)
-            y = a1 * x + b1
+            if b1 is None and b2 is None:
+                assert True, 'Parallel lines do not intersect'
+            elif b1 is None:
+                x = a1
+                y = a2 * x + b2
+            elif b2 is None:
+                x = a2
+                y = a1 * x + b1
+            else:
+                x = -(b1 - b2) / (a1 - a2)
+                y = a1 * x + b1
+            print('s_line_intersect', p1, p2)
             return np.array((x, y))
 
         pt1 = s_line_intersect(s_left, s_top)
@@ -317,29 +371,19 @@ class ImageProcessing:
         pt3 = s_line_intersect(s_right, s_bottom)
         pt4 = s_line_intersect(s_left, s_bottom)
         corners = np.vstack((pt1, pt2, pt3, pt4))
-
-        def draw_straight_line(image, poly):
-            a, b = poly
-            h, w, *_ = image.shape
-            x = 0
-            pt1 = (x, int(a * x + b))
-            x = w - 1
-            pt2 = (x, int(a * x + b))
-            cv2.line(image, pt1, pt2, (0, 255, 0), 2)
-            y = 0
-            pt1 = (int((y - b) / a), y)
-            y = h - 1
-            pt2 = (int((y - b) / a), y)
-            cv2.line(image, pt1, pt2, (0, 255, 0), 2)
+        print('CORNERS', corners)
 
         if DEBUG:
             img_ = self.__img_resized.copy()
-            draw_straight_line(img_, s_left)
-            draw_straight_line(img_, s_right)
-            draw_straight_line(img_, s_top)
-            draw_straight_line(img_, s_bottom)
+            self.draw_straight_line(img_, s_left)
+            self.draw_straight_line(img_, s_right)
+            self.draw_straight_line(img_, s_top)
+            self.draw_straight_line(img_, s_bottom)
             for c in corners:
-                cv2.circle(img_, tuple(c.astype(np.uint)), 8, (255, 255, 0), 2)
+                try:
+                    cv2.circle(img_, tuple(c.astype(np.uint)), 8, (255, 255, 0), 2)
+                except OverflowError:
+                    pass
             self.display('Grids', img_)
 
         def fit_rect_3d(params, corners):
@@ -408,10 +452,16 @@ class ImageProcessing:
                 d_ = vectors[km.labels_==c]
                 x = np.concatenate((d_[:, 3], d_[:, 3] + d_[:, 1]), axis=0)
                 y = np.concatenate((d_[:, 4], d_[:, 4] + d_[:, 2]), axis=0)
-                p_ = np.polyfit(x, y, 1)
+                if d_[0][1] == 0:
+                    p_ = (d_[0][3], None)
+                else:
+                    p_ = np.polyfit(x, y, 1)
                 grid_lines.append(p_)
                 aligned_vectors.append(d_)
-                print(np.poly1d(p_), p_)
+                try:
+                    print(np.poly1d(p_), p_)
+                except TypeError:
+                    print(p_)
             return grid_lines, aligned_vectors
 
         vertices = np.hstack((down[:, -2:], 
@@ -428,6 +478,20 @@ class ImageProcessing:
 
         meridians = np.vstack((p_down, p_up))
         parallels = np.vstack((p_left, p_right))
+        meridians_sort = np.copy(meridians)
+        m_ = meridians_sort[meridians_sort[:, 1]==None]
+        meridians_sort[meridians_sort[:, 1]==None] = np.flip(meridians_sort[meridians_sort[:, 1]==None], axis=1)
+        print(meridians_sort[meridians_sort[:, 0]==None][:, 0])
+        meridians_sort[meridians_sort==None] = -1
+        print(meridians_sort)
+        print(meridians_sort[:, 0]/meridians_sort[:, 1])
+        meridians = meridians[np.argsort(meridians_sort[:, 0]/meridians_sort[:, 1])]
+        parallels = parallels[np.argsort(parallels[:, 1])]
+        intersects = list()
+        for p in parallels:
+            for m in meridians:
+                intersects.append(s_line_intersect(p, m))
+        intersects = np.rint(intersects).astype(np.uint)
 
         '''params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
         res_lsq = least_squares(fit_rect_3d, params, args=(
@@ -448,48 +512,66 @@ class ImageProcessing:
             h, w, *_ = img_.shape
             for p in meridians:
                 a, b = p
-                y = 0
-                pt1 = (int((y - b) / a), y)
-                y = h - 1
-                pt2 = (int((y - b) / a), y)
+                print(a, b, (b == None))
+                if b is None:
+                    x = int(a)
+                    pt1 = (x, 0)
+                    pt2 = (x, h - 1)
+                else:
+                    y = 0
+                    pt1 = (int((y - b) / a), y)
+                    y = h - 1
+                    pt2 = (int((y - b) / a), y)
                 cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
             for p in parallels:
                 a, b = p
-                x = 0
-                pt1 = (x, int(a * x + b))
-                x = w - 1
-                pt2 = (x, int(a * x + b))
+                print(a, b, (b is None))
+                if b is None:
+                    x = int(a)
+                    pt1 = (x, 0)
+                    pt2 = (x, h - 1)
+                else:
+                    x = 0
+                    pt1 = (x, int(a * x + b))
+                    x = w - 1
+                    pt2 = (x, int(a * x + b))
                 cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
+            i = 0
+            for intersect in intersects:
+                print(intersect)
+                try:
+                    cv2.circle(img_, tuple(intersect), 4, (0, 255, 255), 2)
+                    cv2.putText(img_, '{}'.format(i), tuple(intersect), 
+                        cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 0), 1)
+                except OverflowError:
+                    pass
+                i += 1
+            self.display('Grid Lines', img_)
+
+        intersects = intersects.reshape((rows*2, columns, 4))
+        #print(intersects[::2], intersects[1::2, :, :2])
+        self.__grids = np.hstack((intersects[::2].reshape(-1, 4), 
+            intersects[1::2, :, -2:].reshape(-1, 2), 
+            intersects[1::2, :, :2].reshape(-1, 2))).reshape(-1, 4, 2)
+
+        if DEBUG:
+            img_ = self.__img_resized.copy()
+            i = 0
+            for p in self.__grids:
+                cv2.drawContours(img_, [p], -1, (0, 255, 0), 2)
+                cv2.putText(img_, '{}'.format(i), tuple(np.mean(p, axis=0).astype(np.uint)), 
+                    cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 0), 1)
+                i += 1
             self.display('Grids', img_)
 
-        #print('clustered directions', km.cluster_centers_[:, 0])
-        #print('labels', km.labels_)
-        raise
 
-        grids = np.ndarray((N, 4), dtype=np.float)
-        for i in range(N):
-            grids[i] = np.mean(vectors[vectors[:, 0]==i], axis=0)[1:]
-            print(i, grids[i])
+    @property
+    def grids(self):
+        return self.__grids
 
-        def vanishing_points(params, grids):
-            grids = np.copy(grids.reshape(-1, 4))
-            centers = grids[:, :2].reshape(-1, 2)
-            vectors = grids[:, 2:4].reshape(-1, 2)
-            vectors[:, 0] *= params
-            vectors[:, 1] *= params
-            vanishing_points = centers + vectors
-            km = KMeans(n_clusters=2).fit(vanishing_points)
-            print(km.inertia_, vanishing_points)
-            return km.inertia_
-
-        params = np.ones(shape=(N,), dtype=np.float)
-        res_lsq = least_squares(vanishing_points, params, args=(
-            grids.flatten(),), jac='3-point', loss='soft_l1', 
-            tr_solver='exact', max_nfev=9000, xtol=None, verbose=1)
-        print(res_lsq.x)
-        vanishing_points(res_lsq.x, grids)
-
-        raise
+    @property
+    def shapes(self):
+        return self.__shapes
 
     @property
     def shapes(self):
@@ -498,6 +580,10 @@ class ImageProcessing:
     @property
     def shape_centers(self):
         return self.__shape_centers
+
+    @property
+    def source_factor(self):
+        return self.__source_factor
 
     @property
     def length_factor(self):
@@ -532,26 +618,7 @@ imgp.normalize_source()
 imgp.get_contours()
 
 imgp.approximate_contours()
-imgp.align_grids(6, 4)
-
-# Use different thresholding to get contours to deal with the problem
-# that different patches have different contrast.
-CASCADES = [
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 5, 2),
-    (cv2.ADAPTIVE_THRESH_MEAN_C, 5, 2),
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 5, 6),
-    (cv2.ADAPTIVE_THRESH_MEAN_C, 5, 6),
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 7, 2),
-    (cv2.ADAPTIVE_THRESH_MEAN_C, 7, 2),
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 2),
-    (cv2.ADAPTIVE_THRESH_MEAN_C, 11, 2),
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 11, 4),
-    (cv2.ADAPTIVE_THRESH_MEAN_C, 11, 4),
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 13, 2),
-    (cv2.ADAPTIVE_THRESH_MEAN_C, 13, 2),
-    (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 17, 2),
-    (cv2.ADAPTIVE_THRESH_MEAN_C, 17, 2),
-]
+imgp.detect_grids(6, 4)
 
 def rect_iou(bbox1, bbox2):
     '''
@@ -569,93 +636,16 @@ def rect_iou(bbox1, bbox2):
     iou = w * h / float(w1 * h1 + w2 * h2 - w * h)
     return iou
 
-anchors = imgp.shape_centers.reshape(-1, 2) * imgp.length_factor
-print('anchors', anchors)
-
-def grids_integrity(params, vectors):
-    z = 1
-    tmatrix = params.reshape(3, 3)
-    vectors = vectors.reshape((-1, 2))
-    vectors = np.concatenate((vectors, 
-        np.full((vectors.shape[0], 1), z)), axis=1)
-    transformed = np.einsum('ij,kj->ik', vectors, tmatrix)
-    #print(left_top, z, tmatrix, vectors, transformed, unity)
-    vectors = transformed[:, 0:2]
-    dev = 0.0
-    x = np.sort(vectors[:, 0:1], axis=0)
-    y = np.sort(vectors[:, 1:2], axis=0)
-    kmx = KMeans(n_clusters=6).fit(x)
-    kmy = KMeans(n_clusters=4).fit(y)
-    d = kmx.inertia_ + kmy.inertia_
-    #print(d)
-    return d
-
-rows = 4
-columns = 6
-params = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
-#grids_integrity(params, anchors.flatten())
-res_lsq = least_squares(grids_integrity, params, args=(
-    anchors.flatten(),), jac='3-point', loss='soft_l1', tr_solver='exact',
-    verbose=lsq_verbose)
-tmatrix = res_lsq.x.reshape((3, 3))
-#tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape((3, 3))
-tmatrix_inv = np.linalg.inv(tmatrix)
-print('tmatrix_inv', tmatrix_inv)
-z = 1
-plist = imgp.shapes.reshape(-1, 2) * imgp.length_factor
-plist = np.concatenate((plist, 
-    np.full((plist.shape[0], 1), z)), axis=1)
-plist = plist.dot(tmatrix.T)
-#grids = (grids * thresh.shape[1]).astype(np.uint)
-print('grids aligned', plist)
-x = np.sort(plist[:, 0:1], axis=0)
-y = np.sort(plist[:, 1:2], axis=0)
-#kmx = KMeans(n_clusters=6).fit(x)
-#kmy = KMeans(n_clusters=4).fit(y)
-kmx = KMeans(n_clusters=columns*2).fit(x)
-kmy = KMeans(n_clusters=rows*2).fit(y)
-x_coords = np.sort(kmx.cluster_centers_, axis=0).reshape((-1, 2))
-y_coords = np.sort(kmy.cluster_centers_, axis=0).reshape((-1, 2))
-print('KMeans', y_coords, x_coords)
-
-'''grids_3d = np.ndarray(shape=(24, 3), dtype=np.float)
-centersx = np.sort(kmx.cluster_centers_, axis=0).ravel()
-centersy = np.sort(kmy.cluster_centers_, axis=0)
-grids_3d[:, 0] = np.tile(centersx, 4)
-grids_3d[:, 1] = np.tile(centersy, 6).ravel()
-grids_3d[:, 2] = np.average(anchors[:, 2:3])'''
-grids_3d = np.ndarray(shape=(columns*rows, 4, 3), dtype=np.float)
-x_coords = np.repeat(np.tile(x_coords, 2).reshape(1, -1, 2), rows, axis=0)
-y_coords = np.tile(np.repeat(y_coords, 2).reshape(1, -1, 4), columns)
-grids_3d[:, :, 0] = x_coords.reshape(-1, 4)
-grids_3d[:, :, 1] = y_coords.reshape(-1, 4)
-grids_3d[:, :, 2] = np.average(plist[:, 2:3])
-'''plist = np.array(plist)
-gw = int(np.average(plist[:, 2:3]) / 3)
-gh = int(np.average(plist[:, 2:4]) / 3)
-diag = np.array((gw, gh + 1))
-print(gw, gh)'''
-print('grids_3d', grids_3d)
-grids = (grids_3d.reshape(-1, 3).dot(tmatrix_inv.T))[:, 0:2]
-grids = grids.reshape(-1, 4, 2)
-print('grids', grids)
+grids = imgp.grids
 
 color_patches = list()
 image_grids = np.copy(imgp.image)
 image_mask = np.zeros(imgp.image.shape, np.uint8)
-for p in np.rint(grids * imgp.display_width).astype(np.uint):
+for p in np.rint(grids * imgp.source_factor).astype(np.uint):
     p = p.reshape(-1, 1, 2)
-    _ = p[2].copy()
-    p[2] = p[3].copy()
-    p[3] = _
     color_patches.append(p)
     cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
     cv2.fillConvexPoly(image_mask, p, (255, 255, 255))
-    '''#cv2.circle(image_grids, tuple(p), 30, (0, 255, 0), 2)
-    pt1 = tuple((p - diag * imgp.length_factor).astype(np.uint))
-    pt2 = tuple((p + diag * imgp.length_factor).astype(np.uint))
-    print(pt1, pt2)
-    cv2.rectangle(image_grids, pt1, pt2, (0, 255, 0), 2)'''
 '''grids -= diag
 grids = np.concatenate((grids, 
     np.full((grids.shape[0], 1), gw * 2)), axis=1)
