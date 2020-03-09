@@ -22,10 +22,10 @@ PATH_IN = './images/20200213_103455.jpg'
 #PATH_IN = './images/20200213_103542.jpg' # noise rectangles
 PATH_IN = './images/color_checker.jpg'
 #PATH_IN = './images/20200220_120829.jpg' # yellowish
-#PATH_IN = './images/20200220_120820.jpg' # blueish
+PATH_IN = './images/20200220_120820.jpg' # blueish
 #PATH_IN = './images/20200303_114801.jpg'
 #PATH_IN = './images/20200303_114806.jpg'
-PATH_IN = './images/20200303_114812.jpg' # poor
+#PATH_IN = './images/20200303_114812.jpg' # poor
 #PATH_IN = './images/20200303_114815.jpg' # Need to fix Z
 #PATH_IN = './images/20200303_114817.jpg' # Need to fix Z
 
@@ -203,7 +203,7 @@ class ImageProcessing:
                 cv2.circle(img_, tuple(np.rint(center).astype(np.uint)), 
                     5, (255, 255, 0), -1)
                 cv2.drawContours(img_, [approx], -1, (0, 255, 0), 2)
-        self.display('Squares', img_)
+        if DEBUG: self.display('Squares', img_)
         self.__shapes = np.array(polygons, dtype=np.float).reshape((-1, 4, 2))
         self.__shape_centers = np.array(centers, dtype=np.float)
 
@@ -655,8 +655,9 @@ image_mask = np.zeros(imgp.image.shape, np.uint8)
 for p in np.rint(grids * imgp.source_factor).astype(np.uint):
     p = p.reshape(-1, 1, 2)
     color_patches.append(p)
-    cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
-    cv2.fillConvexPoly(image_mask, p, (255, 255, 255))
+    if DEBUG:
+        cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
+        cv2.fillConvexPoly(image_mask, p, (255, 255, 255))
 '''grids -= diag
 grids = np.concatenate((grids, 
     np.full((grids.shape[0], 1), gw * 2)), axis=1)
@@ -665,10 +666,11 @@ grids = np.concatenate((grids,
 plist = grids.astype(np.uint)
 print(plist)'''
 # show the output image
-cv2.imshow("Grids", image_grids)
-cv2.waitKey(0)
-cv2.imshow("Mask", image_mask)
-cv2.waitKey(0)
+if DEBUG:
+    cv2.imshow("Grids", image_grids)
+    cv2.waitKey(0)
+    cv2.imshow("Mask", image_mask)
+    cv2.waitKey(0)
 
 def color_distance_(color_a_, color_b_):
     l1, a1, b1 = color_a_
@@ -880,6 +882,22 @@ for p in color_patches:
 
     ref_color_index += 1
 
+COLOR_POLYN_DEGREE = 2 + 1
+
+def color_transform_poly(params, colors_train, colors_target):
+    colors_train = colors_train.reshape((24, 3))
+    coeffs = params.reshape((3, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE))
+    transformed = np.copy(colors_train)
+    for c in range(3):
+        l = colors_train[:, 0]
+        a = colors_train[:, 1]
+        b = colors_train[:, 2]
+        transformed[:, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
+    target = colors_target.reshape((24, 3))
+    #d = color_distance_sum(transformed, target)
+    d = np.linalg.norm(transformed - target)
+    return d
+
 def color_transform(tmatrix, colors_train, colors_target):
     colors_train = colors_train.reshape((24, 3))
     #colors_train = np.concatenate((colors_train, 
@@ -935,51 +953,70 @@ samples[:, :] /= 128
 print('ref_colors', ref_colors)
 print('samples', samples)'''
 
-tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
-#tmatrix = np.array((1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1), dtype=np.float)
-res_lsq = least_squares(color_transform, tmatrix, args=(
-    samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-    tr_solver='exact', ftol=None, xtol=1e-12, gtol=None, max_nfev=9000,
-    verbose=lsq_verbose)
-tmatrix = res_lsq.x.reshape(3, 3)
-#tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
-print(res_lsq)
-#raise
-#res = minimize(color_transform, samples.flatten(), method='Nelder-Mead', tol=1e-6)
-#print(res)
-
+lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
 cv2.imwrite('./images/output.jpg', image)
 cv2.imshow("Image", image)
 cv2.waitKey(0)
 
-'''image = image.astype(np.float)
-image[:, 0:1] *= 100 / 255
-image[:, 1:3] -= 128'''
-image = np.copy(imgp.image)#.astype(np.float)
-lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
+if False:
+    tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
+    res_lsq = least_squares(color_transform, tmatrix, args=(
+        samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
+        tr_solver='exact', ftol=None, xtol=1e-12, gtol=None, max_nfev=9000,
+        verbose=lsq_verbose)
+    tmatrix = res_lsq.x.reshape(3, 3)
+    #tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
+    print(res_lsq)
+    #raise
+    #res = minimize(color_transform, samples.flatten(), method='Nelder-Mead', tol=1e-6)
+    #print(res)
 
-lab[:, :, 0] *= 100 / 255
-lab[:, :, 1:3] -= 128
-print('pre_dot', image[100][100])
-lab = lab.dot(tmatrix.T)
-lab[:, :, 1:3] += 128
-lab[:, :, 0] *= 255 / 100
-print('post_dot', image[100][100])
+    '''image = image.astype(np.float)
+    image[:, 0:1] *= 100 / 255
+    image[:, 1:3] -= 128'''
+    image = np.copy(imgp.image)#.astype(np.float)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
+
+    lab[:, :, 0] *= 100 / 255
+    lab[:, :, 1:3] -= 128
+    print('pre_dot', image[100][100])
+    lab = lab.dot(tmatrix.T)
+    lab[:, :, 1:3] += 128
+    lab[:, :, 0] *= 255 / 100
+    print('post_dot', image[100][100])
+
+else:
+    lsq_verbose = 2
+    params = np.zeros((3, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE), dtype=np.float)
+    params[0][1][0][0] = 1
+    params[1][0][1][0] = 1
+    params[2][0][0][1] = 1
+    res_lsq = least_squares(color_transform_poly, params.ravel(), args=(
+        samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
+        tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=90000,
+        verbose=lsq_verbose)
+    coeffs = res_lsq.x.reshape(3, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE)
+    print(coeffs)
+
+    image = np.copy(imgp.image)#.astype(np.float)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
+    lab[:, :, 0] *= 100 / 255
+    lab[:, :, 1:3] -= 128
+    transformed = np.copy(lab)
+    for c in range(3):
+        l = lab[:, :, 0]
+        a = lab[:, :, 1]
+        b = lab[:, :, 2]
+        transformed[:, :, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
+    transformed[:, :, 1:3] += 128
+    transformed[:, :, 0] *= 255 / 100
+    lab = transformed
 
 image = cv2.cvtColor(np.rint(lab).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
-'''image[:, :, 0:1] *= 100 / 255
-image[:, :, 0:1] -= 128
-image[:, :, :] /= 128
-print('pre_dot', image[100][100])
-image = image.dot(tmatrix.T)
-image[:, :, :] *= 128
-image[:, :] += 128
-image[:, :, 0:1] *= 255 / 100
-print('post_dot', image[100][100])'''
-
 ref_color_index = 0
 #image = np.rint(image)
+d_sum = 0
 for p in color_patches:
     image_mask = np.zeros(image.shape[:2], np.uint8)
     cv2.fillConvexPoly(image_mask, p, (255,))
@@ -988,7 +1025,6 @@ for p in color_patches:
         y = np.average(cie_y[r[0]:r[1], r[2]:r[3]]) / 255
     elif COLOR_SPACE == 'lab':
         color_mean = cv2.mean(lab, image_mask)
-        print('mean', lab.shape, lab[20][20], color_mean)
         z = color_mean[0] * 100 / 255
         x = color_mean[1] - 128
         y = color_mean[2] - 128
@@ -1000,6 +1036,7 @@ for p in color_patches:
     #nearest, d = nearest_color((z, x, y))
     index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
     d = color_distance(ref_color, (z, x, y))
+    d_sum += d
     #print(x, y, cvalues)
     #print()
     # Print color values
@@ -1021,5 +1058,7 @@ for p in color_patches:
 
 '''img_trans[:, 0:1] *= 255 / 100
 img_trans[:, 1:3] += 128'''
+print('Sum of color distances: {}'.format(d_sum))
+#Sum of color distances: 249.69263337647757
 cv2.imshow("Image Transformed", image.astype('uint8'))
 cv2.waitKey(0)
