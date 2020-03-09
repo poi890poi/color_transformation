@@ -9,6 +9,7 @@ import cv2
 import imutils
 from scipy.optimize import minimize, least_squares
 from scipy.stats import gaussian_kde
+from scipy.special import comb
 from sklearn.neighbors import KernelDensity
 from sklearn.cluster import KMeans
 import skimage.transform as sk_xform
@@ -882,11 +883,50 @@ for p in color_patches:
 
     ref_color_index += 1
 
-COLOR_POLYN_DEGREE = 2 + 1
+COLOR_POLYN_DEGREE = 3
+
+def coeffs_1d_to_3d(params, degree, N=3):
+    '''
+    Some polynomial functions use array of N*D to store coefficients while
+    acutal number of coefficients for the polynomial function is comb(N+D, D).
+    This function takes array of shape (N, D) and return 1D array of the 
+    coefficients.
+    '''
+    d = degree
+    D = degree + 1
+    params = params.reshape(N, -1)
+    coeffs = np.zeros((N, D, D, D), dtype=np.float)
+    for c in range(N):
+        p = 0
+        for z in range(D):
+            for y in range(D-z):
+                l = D - y - z
+                coeffs[c, 0:l, y, z] = params[c, p:p+l]
+                p += l
+    return coeffs
+
+def coeffs_3d_to_1d(coeffs, degree, N=3):
+    '''
+    Some polynomial functions use array of N*D to store coefficients while
+    acutal number of coefficients for the polynomial function is comb(N+D, D).
+    This function takes 1D array of the coefficients and return array of 
+    shape (N, D).
+    '''
+    d = degree
+    D = degree + 1
+    params = np.zeros((N, int(comb(d + N, d))), dtype=np.float)
+    for c in range(N):
+        p = 0
+        for z in range(D):
+            for y in range(D-z):
+                l = D - y - z
+                params[c, p:p+l] = coeffs[c, 0:l, y, z]
+                p += l
+    return params
 
 def color_transform_poly(params, colors_train, colors_target):
     colors_train = colors_train.reshape((24, 3))
-    coeffs = params.reshape((3, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE))
+    coeffs = coeffs_1d_to_3d(params, COLOR_POLYN_DEGREE)
     transformed = np.copy(colors_train)
     for c in range(3):
         l = colors_train[:, 0]
@@ -894,8 +934,8 @@ def color_transform_poly(params, colors_train, colors_target):
         b = colors_train[:, 2]
         transformed[:, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
     target = colors_target.reshape((24, 3))
-    #d = color_distance_sum(transformed, target)
-    d = np.linalg.norm(transformed - target)
+    d = color_distance_sum(transformed, target)
+    #d = np.linalg.norm(transformed - target)
     return d
 
 def color_transform(tmatrix, colors_train, colors_target):
@@ -958,11 +998,12 @@ cv2.imwrite('./images/output.jpg', image)
 cv2.imshow("Image", image)
 cv2.waitKey(0)
 
-if False:
+if True:
+    lsq_verbose = 2
     tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
     res_lsq = least_squares(color_transform, tmatrix, args=(
         samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-        tr_solver='exact', ftol=None, xtol=1e-12, gtol=None, max_nfev=9000,
+        tr_solver='exact', ftol=None, xtol=1e-15, gtol=None, max_nfev=320000,
         verbose=lsq_verbose)
     tmatrix = res_lsq.x.reshape(3, 3)
     #tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
@@ -987,16 +1028,20 @@ if False:
 
 else:
     lsq_verbose = 2
-    params = np.zeros((3, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE), dtype=np.float)
-    params[0][1][0][0] = 1
-    params[1][0][1][0] = 1
-    params[2][0][0][1] = 1
+    
+    D = COLOR_POLYN_DEGREE + 1
+    coeffs = np.zeros((3, D, D, D), dtype=np.float)
+    coeffs[0][1][0][0] = 1
+    coeffs[1][0][1][0] = 1
+    coeffs[2][0][0][1] = 1
+    params = coeffs_3d_to_1d(coeffs, COLOR_POLYN_DEGREE)
+    print('INPUT', coeffs.shape, params.shape)
     res_lsq = least_squares(color_transform_poly, params.ravel(), args=(
         samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-        tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=90000,
+        tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=320000,
         verbose=lsq_verbose)
-    coeffs = res_lsq.x.reshape(3, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE, COLOR_POLYN_DEGREE)
-    print(coeffs)
+    coeffs = coeffs_1d_to_3d(res_lsq.x, COLOR_POLYN_DEGREE)
+    print('OUTPUT', coeffs.shape)
 
     image = np.copy(imgp.image)#.astype(np.float)
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
