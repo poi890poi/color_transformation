@@ -883,7 +883,7 @@ for p in color_patches:
 
     ref_color_index += 1
 
-COLOR_POLYN_DEGREE = 3
+COLOR_POLYN_DEGREE = 1
 
 def coeffs_1d_to_3d(params, degree, N=3):
     '''
@@ -924,9 +924,9 @@ def coeffs_3d_to_1d(coeffs, degree, N=3):
                 p += l
     return params
 
-def color_transform_poly(params, colors_train, colors_target):
+def color_transform_poly(params, degree, colors_train, colors_target):
     colors_train = colors_train.reshape((24, 3))
-    coeffs = coeffs_1d_to_3d(params, COLOR_POLYN_DEGREE)
+    coeffs = coeffs_1d_to_3d(params, degree)
     transformed = np.copy(colors_train)
     for c in range(3):
         l = colors_train[:, 0]
@@ -934,8 +934,9 @@ def color_transform_poly(params, colors_train, colors_target):
         b = colors_train[:, 2]
         transformed[:, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
     target = colors_target.reshape((24, 3))
-    d = color_distance_sum(transformed, target)
-    #d = np.linalg.norm(transformed - target)
+    # Errors encountered in scipy leaset squares optimization with CIEDE2000 calculation 
+    #d = color_distance_sum(transformed, target)
+    d = np.linalg.norm(transformed - target)
     return d
 
 def color_transform(tmatrix, colors_train, colors_target):
@@ -998,50 +999,97 @@ cv2.imwrite('./images/output.jpg', image)
 cv2.imshow("Image", image)
 cv2.waitKey(0)
 
-if True:
-    lsq_verbose = 2
-    tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
+def get_color_xform_matrix(samples, ref_colors, initial_matrix, max_nfev=3200):
+    '''
+    Use source color samples and reference color values to optimize 3D
+    transformation matrix for color transformation.
+    '''
+    tmatrix = initial_matrix
     res_lsq = least_squares(color_transform, tmatrix, args=(
         samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-        tr_solver='exact', ftol=None, xtol=1e-15, gtol=None, max_nfev=320000,
+        tr_solver='exact', ftol=None, xtol=1e-15, gtol=None, max_nfev=max_nfev,
         verbose=lsq_verbose)
     tmatrix = res_lsq.x.reshape(3, 3)
-    #tmatrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float).reshape(3, 3)
-    print(res_lsq)
-    #raise
-    #res = minimize(color_transform, samples.flatten(), method='Nelder-Mead', tol=1e-6)
-    #print(res)
+    return tmatrix
 
-    '''image = image.astype(np.float)
-    image[:, 0:1] *= 100 / 255
-    image[:, 1:3] -= 128'''
-    image = np.copy(imgp.image)#.astype(np.float)
+def get_color_polynomial(samples, ref_colors, degree, initial_coeffs, max_nfev=3200):
+    '''
+    Use source color samples and reference color values to optimize polynomial 
+    coefficients for color transformation.
+    '''
+    lsq_verbose = 2
+    D = degree + 1
+    params = coeffs_3d_to_1d(initial_coeffs, degree)
+    res_lsq = least_squares(color_transform_poly, params.ravel(), args=(
+        degree, samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
+        tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=3200,
+        verbose=lsq_verbose)
+    coeffs = coeffs_1d_to_3d(res_lsq.x, degree)
+    return coeffs
+
+def poly_extend(coeffs):
+    '''
+    Increase degree of polynomial by 1 and return resized coefficients array.
+    '''
+    variables, D, *_ = coeffs.shape
+    new = np.zeros((variables, D+1, D+1, D+1), dtype=np.float)
+    new[:, :D, :D, :D] = coeffs
+    return new
+
+    # Fill axis 3 with zeros of shape (1,)
+    c_ = coeffs.reshape(-1, D)
+    s_ = np.zeros((variables*D**2, 1))
+    coeffs = np.hstack((c_, s_)).reshape(-1, D, D+1)
+
+    # Fill axis 2 with zeros of shape (1, 3)
+    c_ = coeffs.reshape(-1, D, D+1)
+    s_ = np.zeros((variables*D, 1, D+1))
+    coeffs = np.hstack((c_, s_)).reshape(-1, D, D+1, D+1)
+
+    # Fill axis 1 with zeros of shape (1, 3, 3)
+    c_ = coeffs.reshape(-1, D, D+1, D+1)
+    s_ = np.zeros((variables, 1, D+1, D+1))
+    coeffs = np.hstack((c_, s_)).reshape(-1, D+1, D+1, D+1)
+
+    return coeffs
+
+COLOR_XFORM_MATRIX = 0
+COLOR_POLYNOMIAL = 1
+COLOR_CALIB_METHOD = COLOR_POLYNOMIAL
+
+if COLOR_CALIB_METHOD == COLOR_XFORM_MATRIX:
+    initial_matrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
+    tmatrix = get_color_xform_matrix(samples, ref_colors, initial_matrix)
+
+    image = np.copy(imgp.image)
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
 
     lab[:, :, 0] *= 100 / 255
     lab[:, :, 1:3] -= 128
-    print('pre_dot', image[100][100])
     lab = lab.dot(tmatrix.T)
     lab[:, :, 1:3] += 128
     lab[:, :, 0] *= 255 / 100
-    print('post_dot', image[100][100])
 
 else:
-    lsq_verbose = 2
-    
-    D = COLOR_POLYN_DEGREE + 1
+    degree = 1
+    D = degree + 1
     coeffs = np.zeros((3, D, D, D), dtype=np.float)
     coeffs[0][1][0][0] = 1
     coeffs[1][0][1][0] = 1
     coeffs[2][0][0][1] = 1
-    params = coeffs_3d_to_1d(coeffs, COLOR_POLYN_DEGREE)
-    print('INPUT', coeffs.shape, params.shape)
-    res_lsq = least_squares(color_transform_poly, params.ravel(), args=(
-        samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-        tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=320000,
-        verbose=lsq_verbose)
-    coeffs = coeffs_1d_to_3d(res_lsq.x, COLOR_POLYN_DEGREE)
-    print('OUTPUT', coeffs.shape)
+
+    max_nfev = 3200
+    coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
+
+    coeffs = poly_extend(coeffs)
+    degree += 1
+    max_nfev *= 2
+    coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
+
+    coeffs = poly_extend(coeffs)
+    degree += 1
+    max_nfev *= 2
+    coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
 
     image = np.copy(imgp.image)#.astype(np.float)
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
@@ -1104,6 +1152,8 @@ for p in color_patches:
 '''img_trans[:, 0:1] *= 255 / 100
 img_trans[:, 1:3] += 128'''
 print('Sum of color distances: {}'.format(d_sum))
-#Sum of color distances: 249.69263337647757
+# Transformation matrix, sum of color distances: 249.69263337647757
+# 3 degrees polynomial with 320000 iterations, sum of color distances: 213.58460800749998
+# 3 pass polynomial fit with 3200, 3200, 3200 iterations, sum of color distances: 210.72933187615357
 cv2.imshow("Image Transformed", image.astype('uint8'))
 cv2.waitKey(0)
