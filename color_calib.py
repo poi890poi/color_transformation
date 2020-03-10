@@ -2,6 +2,7 @@ import sys
 import argparse
 import math
 import operator
+import pickle
 from pprint import pprint
 
 import numpy as np
@@ -147,6 +148,14 @@ class ImageProcessing:
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
+    def output_image_file(self, name, image):
+        try:
+            self.__step_output += 1
+        except AttributeError:
+            self.__step_output = 1
+        cv2.imwrite('./images/output/{:02d}_{}.jpg'.format(
+            self.__step_output, name), image)
+
     def render_contours(self, image, contours):
         for c in contours:
             M = cv2.moments(c)
@@ -163,23 +172,30 @@ class ImageProcessing:
         gray, a, b = cv2.split(lab)
         blurred = cv2.GaussianBlur(gray, (9, 9), 0)
         if DEBUG: self.display('Blurred', blurred)
+        self.output_image_file('gaussian_blur', blurred)
+
         method, blockSize, C, *_ = (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 7, 2)
         binary = cv2.adaptiveThreshold(blurred, 255, method,
                     cv2.THRESH_BINARY, blockSize, C)
         if DEBUG: self.display('Binary', binary)
+        self.output_image_file('adaptive_threshold', binary)
 
         # Apply erosion to remove noises connected to the square.
         kernel = np.ones((9,9),np.uint8)
         binary = cv2.erode(binary, kernel)
         if DEBUG: self.display('Eroded', binary)
+        self.output_image_file('erosion', binary)
 
         contours = cv2.findContours(binary.copy(), cv2.RETR_LIST,
             cv2.CHAIN_APPROX_TC89_KCOS)
         contours = imutils.grab_contours(contours)
+        
+        img_ = self.__img_resized.copy()
+        self.render_contours(img_, contours)
         if DEBUG:
-            img_ = self.__img_resized.copy()
-            self.render_contours(img_, contours)
             self.display('Contours', img_)
+        self.output_image_file('contours', img_)
+
         self.__contours = contours
         return (contours, lab, binary)
 
@@ -200,11 +216,11 @@ class ImageProcessing:
             center = (M["m10"] / M["m00"], M["m01"] / M["m00"])
             centers.append(center)
             approx = approx.astype("int")
-            if DEBUG:
-                cv2.circle(img_, tuple(np.rint(center).astype(np.uint)), 
-                    5, (255, 255, 0), -1)
-                cv2.drawContours(img_, [approx], -1, (0, 255, 0), 2)
+            cv2.circle(img_, tuple(np.rint(center).astype(np.uint)), 
+                5, (255, 255, 0), -1)
+            cv2.drawContours(img_, [approx], -1, (0, 255, 0), 2)
         if DEBUG: self.display('Squares', img_)
+        self.output_image_file('shapes', img_)
         self.__shapes = np.array(polygons, dtype=np.float).reshape((-1, 4, 2))
         self.__shape_centers = np.array(centers, dtype=np.float)
 
@@ -309,10 +325,10 @@ class ImageProcessing:
         np.sort(left, axis=0, order='cy')
         np.argsort(right, axis=0, order='cy')'''
 
-        if DEBUG:
-            img_ = self.__img_resized.copy()
-            self.render_vectors(img_, vectors)
-            self.display('Vectors', img_)
+        img_ = self.__img_resized.copy()
+        self.render_vectors(img_, vectors)
+        if DEBUG: self.display('Vectors', img_)
+        self.output_image_file('sides_sparse', img_)
 
         """p_down = fit_line(down, columns, OR_VERTICAL)
         p_up = fit_line(up, columns, OR_VERTICAL)
@@ -341,14 +357,10 @@ class ImageProcessing:
             return p_
 
         vertical = np.vstack((down, up))
-        print('LEFT')
         s_left = get_straight(vertical[np.argmin(vertical[:, 3])])
-        print('RIGHT')
         s_right = get_straight(vertical[np.argmax(vertical[:, 3])])
         horizontal = np.vstack((left, right))
-        print('TOP')
         s_top = get_straight(horizontal[np.argmin(horizontal[:, 4])])
-        print('BOTTOM')
         s_bottom = get_straight(horizontal[np.argmax(horizontal[:, 4])])
 
         def s_line_intersect(p1, p2):
@@ -369,7 +381,6 @@ class ImageProcessing:
             else:
                 x = -(b1 - b2) / (a1 - a2)
                 y = a1 * x + b1
-            print('s_line_intersect', p1, p2)
             return np.array((x, y))
 
         pt1 = s_line_intersect(s_left, s_top)
@@ -379,18 +390,19 @@ class ImageProcessing:
         corners = np.vstack((pt1, pt2, pt3, pt4))
         print('CORNERS', corners)
 
+        img_ = self.__img_resized.copy()
+        self.draw_straight_line(img_, s_left)
+        self.draw_straight_line(img_, s_right)
+        self.draw_straight_line(img_, s_top)
+        self.draw_straight_line(img_, s_bottom)
+        for c in corners:
+            try:
+                cv2.circle(img_, tuple(c.astype(np.uint)), 8, (255, 255, 0), 2)
+            except OverflowError:
+                pass
         if DEBUG:
-            img_ = self.__img_resized.copy()
-            self.draw_straight_line(img_, s_left)
-            self.draw_straight_line(img_, s_right)
-            self.draw_straight_line(img_, s_top)
-            self.draw_straight_line(img_, s_bottom)
-            for c in corners:
-                try:
-                    cv2.circle(img_, tuple(c.astype(np.uint)), 8, (255, 255, 0), 2)
-                except OverflowError:
-                    pass
             self.display('Grids', img_)
+        self.output_image_file('vectors_aligned', img_)
 
         def fit_rect_3d(params, corners):
             obj_points = np.array(
@@ -522,43 +534,44 @@ class ImageProcessing:
         print('corners', corners.astype(np.uint))
         print('transformed', c_.dot(tmatrix.T))'''
 
+        img_ = self.__img_resized.copy()
+        h, w, *_ = img_.shape
+        for p in meridians:
+            a, b = p
+            if b is None:
+                x = int(a)
+                pt1 = (x, 0)
+                pt2 = (x, h - 1)
+            else:
+                y = 0
+                pt1 = (int((y - b) / a), y)
+                y = h - 1
+                pt2 = (int((y - b) / a), y)
+            cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
+        for p in parallels:
+            a, b = p
+            if b is None:
+                x = int(a)
+                pt1 = (x, 0)
+                pt2 = (x, h - 1)
+            else:
+                x = 0
+                pt1 = (x, int(a * x + b))
+                x = w - 1
+                pt2 = (x, int(a * x + b))
+            cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
+        i = 0
+        for intersect in intersects:
+            try:
+                cv2.circle(img_, tuple(intersect), 4, (0, 255, 255), 2)
+                cv2.putText(img_, '{}'.format(i), tuple(intersect), 
+                    cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 0), 1)
+            except OverflowError:
+                pass
+            i += 1
         if DEBUG:
-            img_ = self.__img_resized.copy()
-            h, w, *_ = img_.shape
-            for p in meridians:
-                a, b = p
-                if b is None:
-                    x = int(a)
-                    pt1 = (x, 0)
-                    pt2 = (x, h - 1)
-                else:
-                    y = 0
-                    pt1 = (int((y - b) / a), y)
-                    y = h - 1
-                    pt2 = (int((y - b) / a), y)
-                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
-            for p in parallels:
-                a, b = p
-                if b is None:
-                    x = int(a)
-                    pt1 = (x, 0)
-                    pt2 = (x, h - 1)
-                else:
-                    x = 0
-                    pt1 = (x, int(a * x + b))
-                    x = w - 1
-                    pt2 = (x, int(a * x + b))
-                cv2.line(img_, pt1, pt2, (0, 255, 0), 2)
-            i = 0
-            for intersect in intersects:
-                try:
-                    cv2.circle(img_, tuple(intersect), 4, (0, 255, 255), 2)
-                    cv2.putText(img_, '{}'.format(i), tuple(intersect), 
-                        cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 0), 1)
-                except OverflowError:
-                    pass
-                i += 1
             self.display('Grid Lines', img_)
+        self.output_image_file('grid_lines', img_)
 
         intersects = intersects.reshape((rows*2, columns, 4))
         #print(intersects[::2], intersects[1::2, :, :2])
@@ -566,16 +579,16 @@ class ImageProcessing:
             intersects[1::2, :, -2:].reshape(-1, 2), 
             intersects[1::2, :, :2].reshape(-1, 2))).reshape(-1, 4, 2)
 
+        img_ = self.__img_resized.copy()
+        i = 0
+        for p in self.__grids:
+            cv2.drawContours(img_, [p], -1, (0, 255, 0), 2)
+            cv2.putText(img_, '{}'.format(i), tuple(np.mean(p, axis=0).astype(np.uint)), 
+                cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 0), 1)
+            i += 1
         if DEBUG:
-            img_ = self.__img_resized.copy()
-            i = 0
-            for p in self.__grids:
-                cv2.drawContours(img_, [p], -1, (0, 255, 0), 2)
-                cv2.putText(img_, '{}'.format(i), tuple(np.mean(p, axis=0).astype(np.uint)), 
-                    cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 0), 1)
-                i += 1
             self.display('Grids', img_)
-
+        self.output_image_file('grids', img_)
 
     @property
     def grids(self):
@@ -621,535 +634,561 @@ class ImageProcessing:
     def image(self):
         return self.__img_source
 
-# load the source image
-imgp = ImageProcessing(PATH_IN)
-imgp.normalize_source()
 
-# convert the resized image to grayscale, blur it slightly,
-# and threshold it
-imgp.get_contours()
+class Geometry:
 
-imgp.approximate_contours()
-imgp.detect_grids(6, 4)
+    @classmethod
+    def rect_iou(cls, bbox1, bbox2):
+        '''
+        Calculate intersection-over-union of 2 rectangles supplied in the format 
+        of (x, y, w, h).
+        '''
+        x1, y1, w1, h1 = bbox1
+        x2, y2, w2, h2 = bbox2
+        x = max(x1, x2)
+        y = max(y1, y2)
+        w = min(x1 + w1, x2 + w2) - x
+        if w <= 0: return 0
+        h = min(y1 + h1, y2 + h2) - y
+        if h <= 0: return 0
+        iou = w * h / float(w1 * h1 + w2 * h2 - w * h)
+        return iou
 
-def rect_iou(bbox1, bbox2):
-    '''
-    Calculate intersection-over-union of 2 rectangles supplied in the format 
-    of (x, y, w, h).
-    '''
-    x1, y1, w1, h1 = bbox1
-    x2, y2, w2, h2 = bbox2
-    x = max(x1, x2)
-    y = max(y1, y2)
-    w = min(x1 + w1, x2 + w2) - x
-    if w <= 0: return 0
-    h = min(y1 + h1, y2 + h2) - y
-    if h <= 0: return 0
-    iou = w * h / float(w1 * h1 + w2 * h2 - w * h)
-    return iou
 
-grids = imgp.grids
+class ColorMath:
 
-color_patches = list()
-image_grids = np.copy(imgp.image)
-image_mask = np.zeros(imgp.image.shape, np.uint8)
-for p in np.rint(grids * imgp.source_factor).astype(np.uint):
-    p = p.reshape(-1, 1, 2)
-    color_patches.append(p)
-    if DEBUG:
-        cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
-        cv2.fillConvexPoly(image_mask, p, (255, 255, 255))
-'''grids -= diag
-grids = np.concatenate((grids, 
-    np.full((grids.shape[0], 1), gw * 2)), axis=1)
-grids = np.concatenate((grids, 
-    np.full((grids.shape[0], 1), gh * 2)), axis=1)
-plist = grids.astype(np.uint)
-print(plist)'''
-# show the output image
-if DEBUG:
-    cv2.imshow("Grids", image_grids)
-    cv2.waitKey(0)
-    cv2.imshow("Mask", image_mask)
-    cv2.waitKey(0)
+    @classmethod
+    def color_distance_(cls, color_a_, color_b_):
+        l1, a1, b1 = color_a_
+        l2, a2, b2 = color_b_
+        color_a = LabColor(l1/100, a1, b1)
+        color_b = LabColor(l2/100, a2, b2)
+        return delta_e_cie2000(color_a, color_b)
 
-def color_distance_(color_a_, color_b_):
-    l1, a1, b1 = color_a_
-    l2, a2, b2 = color_b_
-    color_a = LabColor(l1/100, a1, b1)
-    color_b = LabColor(l2/100, a2, b2)
-    return delta_e_cie2000(color_a, color_b)
-
-def color_distance(color_a_, color_b_):
-    l1, a1, b1 = color_a_
-    l2, a2, b2 = color_b_
-    c1 = math.sqrt(a1**2 + b1**2)
-    c2 = math.sqrt(a2**2 + b2**2)
-    l_delta = l2 - l1
-    l_mean = (l1 + l2) / 2
-    c_mean = (c1 + c2) / 2
-    c_7 = c_mean**7
-    c_25 = math.sqrt(c_7 / (c_7 + 25**7))
-    param_a_prime = 1 + (1 - c_25) / 2
-    a1_prime = a1 * param_a_prime
-    a2_prime = a2 * param_a_prime
-    c1_prime = math.sqrt(a1_prime**2 + b1**2)
-    c2_prime = math.sqrt(a2_prime**2 + b2**2)
-    c_prime_delta = c2_prime - c1_prime
-    c_prime_mean = (c1_prime + c2_prime) / 2
-    h1_prime = math.degrees(math.atan2(b1, a1_prime))
-    h2_prime = math.degrees(math.atan2(b2, a2_prime))
-    h_range = abs(h1_prime - h2_prime)
-    if h_range <= 180:
-        h_prime_delta = h2_prime - h1_prime
-    elif h_range > 180 and h2_prime <= h1_prime:
-        h_prime_delta = h2_prime - h1_prime + 360
-    elif h_range > 180 and h2_prime > h1_prime:
-        h_prime_delta = h2_prime - h1_prime - 360
-    else:
-        raise ValueError('Invalid value for H prime of color difference')
-    h_delta = (2 * math.sqrt(c1_prime * c2_prime) 
-        * math.sin(math.radians(h_prime_delta / 2)))
-    if h_range <= 180:
-        h_mean = (h1_prime + h2_prime) / 2
-    elif h_range > 180 and (h1_prime + h2_prime) < 360:
-        h_mean = (h1_prime + h2_prime + 360) / 2
-    elif h_range > 180 and (h1_prime + h2_prime) >= 360:
-        h_mean = (h1_prime + h2_prime - 360) / 2
-    else:
-        raise ValueError('Invalid value for H prime of color difference')
-    T = (1 - 0.17 * math.cos(math.radians(h_mean - 30))
-        + 0.24 * math.cos(math.radians(h_mean * 2))
-        + 0.32 * math.cos(math.radians(h_mean * 3 + 6))
-        - 0.20 * math.cos(math.radians(h_mean * 4 - 63)))
-    L50 = (l_mean - 50)**2
-    SL = 1 + 0.015 * L50 / math.sqrt(20 + L50)
-    SC = 1 + 0.045 * c_mean
-    SH = 1 + 0.015 * c_mean * T
-    rtr = math.radians(60 * math.exp(-(((h_mean - 275) / 25)**2)))
-    RT = -2 * math.sqrt(c_25) * math.sin(rtr)
-    kL = 1.0
-    kC = 1.0
-    kH = 1.0
-    component_c = c_prime_delta / kC / SC
-    component_h = h_delta / kH / SH
-    E00 = np.sqrt((l_delta / kL / SL)**2 
-        + component_c**2 + component_h**2 
-        + RT * component_c * component_h)
-    '''delta_l = (ref_l - l) ** 2
-    delta_a = (ref_a - a) ** 2
-    delta_b = (ref_b - b) ** 2
-    d = math.sqrt(delta_l + delta_a + delta_b)'''
-    return E00
-
-def color_distance_sum(colors_a, colors_b):
-    l1, a1, b1 = np.split(colors_a, 3, axis=1)
-    l2, a2, b2 = np.split(colors_b, 3, axis=1)
-    np.split(colors_b, 3, axis=1)
-    c1 = np.sqrt(a1**2 + b1**2)
-    c2 = np.sqrt(a2**2 + b2**2)
-    l_delta = l2 - l1
-    l_mean = (l1 + l2) / 2
-    c_mean = (c1 + c2) / 2
-    c_7 = c_mean**7
-    c_25 = np.sqrt(c_7 / (c_7 + 25**7))
-    param_a_prime = 1 + (1 - c_25) / 2
-    a1_prime = a1 * param_a_prime
-    a2_prime = a2 * param_a_prime
-    c1_prime = np.sqrt(a1_prime**2 + b1**2)
-    c2_prime = np.sqrt(a2_prime**2 + b2**2)
-    c_prime_delta = c2_prime - c1_prime
-    c_prime_mean = (c1_prime + c2_prime) / 2
-    h1_prime = np.degrees(np.arctan2(b1, a1_prime))
-    h2_prime = np.degrees(np.arctan2(b2, a2_prime))
-    h_range = np.absolute(h1_prime - h2_prime)
-    h_prime_delta = np.copy(h_range)
-    h_prime_delta[h_range <= 180] = \
-        h2_prime[h_range <= 180] - h1_prime[h_range <= 180]
-    h_prime_delta[(h_range > 180) & (h2_prime <= h1_prime)] = (
-        h2_prime[(h_range > 180) & (h2_prime <= h1_prime)] 
-        - h1_prime[(h_range > 180) & (h2_prime <= h1_prime)] + 360)
-    h_prime_delta[(h_range > 180) & (h2_prime > h1_prime)] = (
-        h2_prime[(h_range > 180) & (h2_prime > h1_prime)] 
-        - h1_prime[(h_range > 180) & (h2_prime > h1_prime)] - 360)
-    h_delta = (2 * np.sqrt(c1_prime * c2_prime) 
-        * np.sin(np.radians(h_prime_delta / 2)))
-    h_mean = np.copy(h_range)
-    h_mean[h_range <= 180] = \
-        (h1_prime[h_range <= 180] + h2_prime[h_range <= 180]) / 2
-    h_mean[(h_range > 180) & ((h1_prime + h2_prime) < 360)] = ((
-        h1_prime[(h_range > 180) & ((h1_prime + h2_prime) < 360)] 
-        - h2_prime[(h_range > 180) & ((h1_prime + h2_prime) < 360)] + 360) / 2)
-    h_mean[(h_range > 180) & ((h1_prime + h2_prime) >= 360)] = ((
-        h1_prime[(h_range > 180) & ((h1_prime + h2_prime) >= 360)] 
-        - h2_prime[(h_range > 180) & ((h1_prime + h2_prime) >= 360)] - 360) / 2)
-    T = (1 - 0.17 * np.cos(np.radians(h_mean - 30))
-        + 0.24 * np.cos(np.radians(h_mean * 2))
-        + 0.32 * np.cos(np.radians(h_mean * 3 + 6))
-        - 0.20 * np.cos(np.radians(h_mean * 4 - 63)))
-    L50 = (l_mean - 50)**2
-    SL = 1 + 0.015 * L50 / np.sqrt(20 + L50)
-    SC = 1 + 0.045 * c_mean
-    SH = 1 + 0.015 * c_mean * T
-    rtr = np.radians(60 * np.exp(-(((h_mean - 275) / 25)**2)))
-    RT = -2 * np.sqrt(c_25) * np.sin(rtr)
-    kL = 1.0
-    kC = 1.0
-    kH = 1.0
-    component_c = c_prime_delta / kC / SC
-    component_h = h_delta / kH / SH
-    E00 = ((l_delta / kL / SL)**2 
-        + component_c**2 + component_h**2 
-        + RT * component_c * component_h)
-    return np.sum(E00)
-
-def nearest_color(sample):
-    d_min = sys.float_info.max
-    for ref in REF_POINTS['lab']:
-        index, name, ref_l, ref_a, ref_b = ref
-        l, a, b = sample
-        delta_l = (ref_l - l) ** 2
+    @classmethod
+    def color_distance(cls, color_a_, color_b_):
+        l1, a1, b1 = color_a_
+        l2, a2, b2 = color_b_
+        c1 = math.sqrt(a1**2 + b1**2)
+        c2 = math.sqrt(a2**2 + b2**2)
+        l_delta = l2 - l1
+        l_mean = (l1 + l2) / 2
+        c_mean = (c1 + c2) / 2
+        c_7 = c_mean**7
+        c_25 = math.sqrt(c_7 / (c_7 + 25**7))
+        param_a_prime = 1 + (1 - c_25) / 2
+        a1_prime = a1 * param_a_prime
+        a2_prime = a2 * param_a_prime
+        c1_prime = math.sqrt(a1_prime**2 + b1**2)
+        c2_prime = math.sqrt(a2_prime**2 + b2**2)
+        c_prime_delta = c2_prime - c1_prime
+        c_prime_mean = (c1_prime + c2_prime) / 2
+        h1_prime = math.degrees(math.atan2(b1, a1_prime))
+        h2_prime = math.degrees(math.atan2(b2, a2_prime))
+        h_range = abs(h1_prime - h2_prime)
+        if h_range <= 180:
+            h_prime_delta = h2_prime - h1_prime
+        elif h_range > 180 and h2_prime <= h1_prime:
+            h_prime_delta = h2_prime - h1_prime + 360
+        elif h_range > 180 and h2_prime > h1_prime:
+            h_prime_delta = h2_prime - h1_prime - 360
+        else:
+            raise ValueError('Invalid value for H prime of color difference')
+        h_delta = (2 * math.sqrt(c1_prime * c2_prime) 
+            * math.sin(math.radians(h_prime_delta / 2)))
+        if h_range <= 180:
+            h_mean = (h1_prime + h2_prime) / 2
+        elif h_range > 180 and (h1_prime + h2_prime) < 360:
+            h_mean = (h1_prime + h2_prime + 360) / 2
+        elif h_range > 180 and (h1_prime + h2_prime) >= 360:
+            h_mean = (h1_prime + h2_prime - 360) / 2
+        else:
+            raise ValueError('Invalid value for H prime of color difference')
+        T = (1 - 0.17 * math.cos(math.radians(h_mean - 30))
+            + 0.24 * math.cos(math.radians(h_mean * 2))
+            + 0.32 * math.cos(math.radians(h_mean * 3 + 6))
+            - 0.20 * math.cos(math.radians(h_mean * 4 - 63)))
+        L50 = (l_mean - 50)**2
+        SL = 1 + 0.015 * L50 / math.sqrt(20 + L50)
+        SC = 1 + 0.045 * c_mean
+        SH = 1 + 0.015 * c_mean * T
+        rtr = math.radians(60 * math.exp(-(((h_mean - 275) / 25)**2)))
+        RT = -2 * math.sqrt(c_25) * math.sin(rtr)
+        kL = 1.0
+        kC = 1.0
+        kH = 1.0
+        component_c = c_prime_delta / kC / SC
+        component_h = h_delta / kH / SH
+        E00 = np.sqrt((l_delta / kL / SL)**2 
+            + component_c**2 + component_h**2 
+            + RT * component_c * component_h)
+        '''delta_l = (ref_l - l) ** 2
         delta_a = (ref_a - a) ** 2
         delta_b = (ref_b - b) ** 2
-        d = math.sqrt(delta_l + delta_a + delta_b)
-        #print(sample, ref, d)
-        if d < d_min:
-            d_min = d
-            nearest = ref
-    return nearest, d
+        d = math.sqrt(delta_l + delta_a + delta_b)'''
+        return E00
 
-# Convert to target color space
-image = np.copy(imgp.image)
-if COLOR_SPACE == 'xyz':
-    cie = cv2.cvtColor(image, cv2.COLOR_BGR2XYZ)
-    cie_x, cie_y, cie_z = cv2.split(cie)
-elif COLOR_SPACE == 'lab':
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    lab_l, lab_a, lab_b = cv2.split(lab)
-else:
-    raise ValueError('Unknown color space')
+    @classmethod
+    def color_distance_sum(cls, colors_a, colors_b):
+        l1, a1, b1 = np.split(colors_a, 3, axis=1)
+        l2, a2, b2 = np.split(colors_b, 3, axis=1)
+        np.split(colors_b, 3, axis=1)
+        c1 = np.sqrt(a1**2 + b1**2)
+        c2 = np.sqrt(a2**2 + b2**2)
+        l_delta = l2 - l1
+        l_mean = (l1 + l2) / 2
+        c_mean = (c1 + c2) / 2
+        c_7 = c_mean**7
+        c_25 = np.sqrt(c_7 / (c_7 + 25**7))
+        param_a_prime = 1 + (1 - c_25) / 2
+        a1_prime = a1 * param_a_prime
+        a2_prime = a2 * param_a_prime
+        c1_prime = np.sqrt(a1_prime**2 + b1**2)
+        c2_prime = np.sqrt(a2_prime**2 + b2**2)
+        c_prime_delta = c2_prime - c1_prime
+        c_prime_mean = (c1_prime + c2_prime) / 2
+        h1_prime = np.degrees(np.arctan2(b1, a1_prime))
+        h2_prime = np.degrees(np.arctan2(b2, a2_prime))
+        h_range = np.absolute(h1_prime - h2_prime)
+        h_prime_delta = np.copy(h_range)
+        h_prime_delta[h_range <= 180] = \
+            h2_prime[h_range <= 180] - h1_prime[h_range <= 180]
+        h_prime_delta[(h_range > 180) & (h2_prime <= h1_prime)] = (
+            h2_prime[(h_range > 180) & (h2_prime <= h1_prime)] 
+            - h1_prime[(h_range > 180) & (h2_prime <= h1_prime)] + 360)
+        h_prime_delta[(h_range > 180) & (h2_prime > h1_prime)] = (
+            h2_prime[(h_range > 180) & (h2_prime > h1_prime)] 
+            - h1_prime[(h_range > 180) & (h2_prime > h1_prime)] - 360)
+        h_delta = (2 * np.sqrt(c1_prime * c2_prime) 
+            * np.sin(np.radians(h_prime_delta / 2)))
+        h_mean = np.copy(h_range)
+        h_mean[h_range <= 180] = \
+            (h1_prime[h_range <= 180] + h2_prime[h_range <= 180]) / 2
+        h_mean[(h_range > 180) & ((h1_prime + h2_prime) < 360)] = ((
+            h1_prime[(h_range > 180) & ((h1_prime + h2_prime) < 360)] 
+            - h2_prime[(h_range > 180) & ((h1_prime + h2_prime) < 360)] + 360) / 2)
+        h_mean[(h_range > 180) & ((h1_prime + h2_prime) >= 360)] = ((
+            h1_prime[(h_range > 180) & ((h1_prime + h2_prime) >= 360)] 
+            - h2_prime[(h_range > 180) & ((h1_prime + h2_prime) >= 360)] - 360) / 2)
+        T = (1 - 0.17 * np.cos(np.radians(h_mean - 30))
+            + 0.24 * np.cos(np.radians(h_mean * 2))
+            + 0.32 * np.cos(np.radians(h_mean * 3 + 6))
+            - 0.20 * np.cos(np.radians(h_mean * 4 - 63)))
+        L50 = (l_mean - 50)**2
+        SL = 1 + 0.015 * L50 / np.sqrt(20 + L50)
+        SC = 1 + 0.045 * c_mean
+        SH = 1 + 0.015 * c_mean * T
+        rtr = np.radians(60 * np.exp(-(((h_mean - 275) / 25)**2)))
+        RT = -2 * np.sqrt(c_25) * np.sin(rtr)
+        kL = 1.0
+        kC = 1.0
+        kH = 1.0
+        component_c = c_prime_delta / kC / SC
+        component_h = h_delta / kH / SH
+        E00 = ((l_delta / kL / SL)**2 
+            + component_c**2 + component_h**2 
+            + RT * component_c * component_h)
+        return np.sum(E00)
 
-padding = 0
-image = np.copy(imgp.image)
-samples = np.ndarray(shape=(24, 3), dtype=np.float)
-ref_color_index = 0
-for p in color_patches:
-    image_mask = np.zeros(imgp.image.shape[:2], np.uint8)
-    cv2.fillConvexPoly(image_mask, p, (255,))
-    ''' # Use histogram instead of mean to calculate the XY values
-    hist, xbins, ybins = np.histogram2d(
-        cie_x[r[0]:r[1], r[2]:r[3]].ravel(),
-        cie_y[r[0]:r[1], r[2]:r[3]].ravel(), [256, 256])
-    major = np.unravel_index(np.argmax(hist, axis=None), hist.shape)'''
+    @classmethod
+    def nearest_color(cls, sample):
+        d_min = sys.float_info.max
+        for ref in REF_POINTS['lab']:
+            index, name, ref_l, ref_a, ref_b = ref
+            l, a, b = sample
+            delta_l = (ref_l - l) ** 2
+            delta_a = (ref_a - a) ** 2
+            delta_b = (ref_b - b) ** 2
+            d = math.sqrt(delta_l + delta_a + delta_b)
+            #print(sample, ref, d)
+            if d < d_min:
+                d_min = d
+                nearest = ref
+        return nearest, d
 
+    @classmethod
+    def color_transform_poly(cls, params, degree, colors_train, colors_target):
+        colors_train = colors_train.reshape((24, 3))
+        coeffs = Polynomial.coeffs_1d_to_3d(params, degree)
+        transformed = np.copy(colors_train)
+        for c in range(3):
+            l = colors_train[:, 0]
+            a = colors_train[:, 1]
+            b = colors_train[:, 2]
+            transformed[:, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
+        target = colors_target.reshape((24, 3))
+        # Errors encountered in scipy leaset squares optimization with CIEDE2000 calculation 
+        #d = color_distance_sum(transformed, target)
+        d = np.linalg.norm(transformed - target)
+        return d
+
+    @classmethod
+    def color_transform(cls, tmatrix, colors_train, colors_target):
+        colors_train = colors_train.reshape((24, 3))
+        #colors_train = np.concatenate((colors_train, 
+        #    np.full((colors_train.shape[0], 1), 1)), axis=1)
+        tmatrix = tmatrix.reshape((3, 3))
+        # einsum subscriptor for N vectors dot N matrices 'ij,ikj->ik'
+        transformed = np.einsum('ij,kj->ik', colors_train, tmatrix)
+        #diff = transformed.flatten() - REF_MATRICES['lab'].flatten()
+        #diff = transformed.flatten() - colors_target
+        #d = np.linalg.norm(diff)
+        d = 0.0
+        d_check = 0.0
+        transformed = transformed[:, 0:3]
+        target = colors_target.reshape((24, 3))
+        #for i in range(24):
+        #    d += color_distance(transformed[i], target[i])
+            #d += delta_e_cie2000(
+            #    LabColor(*transformed[i]), LabColor(*target[i]))
+        d = cls.color_distance_sum(transformed, target)
+        '''for i in range(target.shape[0]):
+            d_check += color_distance(transformed[i], target[i])
+            my_d = color_distance(transformed[i], target[i])
+            color_a = LabColor(transformed[i][0]/100, transformed[i][1], transformed[i][2])
+            color_b = LabColor(target[i][0]/100, target[i][1], target[i][2])
+            color_math_d = delta_e_cie2000(color_a, color_b)
+            print('mine vs color_math', my_d, color_math_d)
+        print('color_distance_sum', d, d_check)'''
+        print('color_distance_sum', d)
+        return d
+        d = 0.0
+        for i in range(target.shape[0]):
+            color_a = LabColor(transformed[i][0]/100, transformed[i][1], transformed[i][2])
+            color_b = LabColor(target[i][0]/100, target[i][1], target[i][2])
+            d += delta_e_cie2000(color_a, color_b)
+        return d
+
+    @classmethod
+    def get_color_xform_matrix(cls, samples, ref_colors, initial_matrix, max_nfev=3200):
+        '''
+        Use source color samples and reference color values to optimize 3D
+        transformation matrix for color transformation.
+        '''
+        tmatrix = initial_matrix
+        res_lsq = least_squares(cls.color_transform, tmatrix, args=(
+            samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
+            tr_solver='exact', ftol=None, xtol=1e-15, gtol=None, max_nfev=max_nfev,
+            verbose=lsq_verbose)
+        tmatrix = res_lsq.x.reshape(3, 3)
+        return tmatrix
+
+    @classmethod
+    def get_color_polynomial(cls, samples, ref_colors, degree, initial_coeffs, max_nfev=3200):
+        '''
+        Use source color samples and reference color values to optimize polynomial 
+        coefficients for color transformation.
+        '''
+        lsq_verbose = 2
+        D = degree + 1
+        params = Polynomial.coeffs_3d_to_1d(initial_coeffs, degree)
+        res_lsq = least_squares(cls.color_transform_poly, params.ravel(), args=(
+            degree, samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
+            tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=max_nfev,
+            verbose=lsq_verbose)
+        coeffs = Polynomial.coeffs_1d_to_3d(res_lsq.x, degree)
+        return coeffs
+
+
+class Polynomial:
+
+    @classmethod
+    def coeffs_1d_to_3d(cls, params, degree, N=3):
+        '''
+        Some polynomial functions use array of N*D to store coefficients while
+        acutal number of coefficients for the polynomial function is comb(N+D, D).
+        This function takes array of shape (N, D) and return 1D array of the 
+        coefficients.
+        '''
+        d = degree
+        D = degree + 1
+        params = params.reshape(N, -1)
+        coeffs = np.zeros((N, D, D, D), dtype=params.dtype)
+        for c in range(N):
+            p = 0
+            for z in range(D):
+                for y in range(D-z):
+                    l = D - y - z
+                    coeffs[c, 0:l, y, z] = params[c, p:p+l]
+                    p += l
+        return coeffs
+
+    @classmethod
+    def coeffs_3d_to_1d(cls, coeffs, degree, N=3):
+        '''
+        Some polynomial functions use array of N*D to store coefficients while
+        acutal number of coefficients for the polynomial function is comb(N+D, D).
+        This function takes 1D array of the coefficients and return array of 
+        shape (N, D).
+        '''
+        d = degree
+        D = degree + 1
+        params = np.zeros((N, int(comb(d + N, d))), dtype=coeffs.dtype)
+        for c in range(N):
+            p = 0
+            for z in range(D):
+                for y in range(D-z):
+                    l = D - y - z
+                    params[c, p:p+l] = coeffs[c, 0:l, y, z]
+                    p += l
+        return params
+
+    @classmethod
+    def poly_extend(cls, coeffs):
+        '''
+        Increase degree of polynomial by 1 and return resized coefficients array.
+        '''
+        variables, D, *_ = coeffs.shape
+        new = np.zeros((variables, D+1, D+1, D+1), dtype=coeffs.dtype)
+        new[:, :D, :D, :D] = coeffs
+        return new
+
+        # Fill axis 3 with zeros of shape (1,)
+        c_ = coeffs.reshape(-1, D)
+        s_ = np.zeros((variables*D**2, 1))
+        coeffs = np.hstack((c_, s_)).reshape(-1, D, D+1)
+
+        # Fill axis 2 with zeros of shape (1, 3)
+        c_ = coeffs.reshape(-1, D, D+1)
+        s_ = np.zeros((variables*D, 1, D+1))
+        coeffs = np.hstack((c_, s_)).reshape(-1, D, D+1, D+1)
+
+        # Fill axis 1 with zeros of shape (1, 3, 3)
+        c_ = coeffs.reshape(-1, D, D+1, D+1)
+        s_ = np.zeros((variables, 1, D+1, D+1))
+        coeffs = np.hstack((c_, s_)).reshape(-1, D+1, D+1, D+1)
+
+        return coeffs
+
+
+if __name__ == "__main__":
+    # load the source image
+    imgp = ImageProcessing(PATH_IN)
+    imgp.normalize_source()
+
+    # convert the resized image to grayscale, blur it slightly,
+    # and threshold it
+    imgp.get_contours()
+
+    imgp.approximate_contours()
+    imgp.detect_grids(6, 4)
+
+
+    grids = imgp.grids
+
+    color_patches = list()
+    image_grids = np.copy(imgp.image)
+    image_mask = np.zeros(imgp.image.shape, np.uint8)
+    for p in np.rint(grids * imgp.source_factor).astype(np.uint):
+        p = p.reshape(-1, 1, 2)
+        color_patches.append(p)
+        cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
+        cv2.fillConvexPoly(image_mask, p, (255, 255, 255))
+
+    # show the output image
+    if DEBUG:
+        cv2.imshow("Grids", image_grids)
+        cv2.waitKey(0)
+        cv2.imshow("Mask", image_mask)
+        cv2.waitKey(0)
+    imgp.output_image_file('grids', image_grids)
+    imgp.output_image_file('mask', image_mask)
+
+    # Convert to target color space
+    image = np.copy(imgp.image)
     if COLOR_SPACE == 'xyz':
-        x = np.average(cie_x[r[0]:r[1], r[2]:r[3]]) / 255
-        y = np.average(cie_y[r[0]:r[1], r[2]:r[3]]) / 255
+        cie = cv2.cvtColor(image, cv2.COLOR_BGR2XYZ)
+        cie_x, cie_y, cie_z = cv2.split(cie)
     elif COLOR_SPACE == 'lab':
-        color_mean = cv2.mean(lab, image_mask)
-        print('mean', lab.shape, lab[20][20], color_mean)
-        z = color_mean[0] * 100 / 255
-        x = color_mean[1] - 128
-        y = color_mean[2] - 128
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        lab_l, lab_a, lab_b = cv2.split(lab)
     else:
         raise ValueError('Unknown color space')
-    cvalues = '%d, %.2f, %.2f' % (z, x, y)
-    samples[ref_color_index] = (z, x, y)
-    print(ref_color_index, (z, x, y), samples[ref_color_index])
-    #nearest, d = nearest_color((z, x, y))
-    index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
-    d = color_distance(ref_color, (z, x, y))
-    #print(x, y, cvalues)
-    #print()
-    # Print color values
-    cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
-    pt1 = tuple((p[0].ravel() + [padding, padding + 16]).astype(np.uint))
-    cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
-        1, (255, 255, 0), 1)
-    # Print ref color
-    pt1 = tuple((p[0].ravel() + [padding, padding + 32]).astype(np.uint))
-    cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
-        1, (255, 255, 0), 1)
-    # Print reference color values
-    ref_values = '%.2f, %.2f' % (ref_color[1], ref_color[2])
-    pt1 = tuple((p[0].ravel() + [padding, padding + 48]).astype(np.uint))
-    cv2.putText(image, ref_values, pt1, cv2.FONT_HERSHEY_PLAIN,
-        1, (255, 255, 0), 1)
-    # Print distance
-    distance = 'd=%.4f' % (d,)
-    pt1 = tuple((p[0].ravel() + [padding, padding + 64]).astype(np.uint))
-    cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
-        1, (255, 255, 0), 1)
 
-    ref_color_index += 1
-
-COLOR_POLYN_DEGREE = 1
-
-def coeffs_1d_to_3d(params, degree, N=3):
-    '''
-    Some polynomial functions use array of N*D to store coefficients while
-    acutal number of coefficients for the polynomial function is comb(N+D, D).
-    This function takes array of shape (N, D) and return 1D array of the 
-    coefficients.
-    '''
-    d = degree
-    D = degree + 1
-    params = params.reshape(N, -1)
-    coeffs = np.zeros((N, D, D, D), dtype=params.dtype)
-    for c in range(N):
-        p = 0
-        for z in range(D):
-            for y in range(D-z):
-                l = D - y - z
-                coeffs[c, 0:l, y, z] = params[c, p:p+l]
-                p += l
-    return coeffs
-
-def coeffs_3d_to_1d(coeffs, degree, N=3):
-    '''
-    Some polynomial functions use array of N*D to store coefficients while
-    acutal number of coefficients for the polynomial function is comb(N+D, D).
-    This function takes 1D array of the coefficients and return array of 
-    shape (N, D).
-    '''
-    d = degree
-    D = degree + 1
-    params = np.zeros((N, int(comb(d + N, d))), dtype=coeffs.dtype)
-    for c in range(N):
-        p = 0
-        for z in range(D):
-            for y in range(D-z):
-                l = D - y - z
-                params[c, p:p+l] = coeffs[c, 0:l, y, z]
-                p += l
-    return params
-
-def color_transform_poly(params, degree, colors_train, colors_target):
-    colors_train = colors_train.reshape((24, 3))
-    coeffs = coeffs_1d_to_3d(params, degree)
-    transformed = np.copy(colors_train)
-    for c in range(3):
-        l = colors_train[:, 0]
-        a = colors_train[:, 1]
-        b = colors_train[:, 2]
-        transformed[:, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
-    target = colors_target.reshape((24, 3))
-    # Errors encountered in scipy leaset squares optimization with CIEDE2000 calculation 
-    #d = color_distance_sum(transformed, target)
-    d = np.linalg.norm(transformed - target)
-    return d
-
-def color_transform(tmatrix, colors_train, colors_target):
-    colors_train = colors_train.reshape((24, 3))
-    #colors_train = np.concatenate((colors_train, 
-    #    np.full((colors_train.shape[0], 1), 1)), axis=1)
-    tmatrix = tmatrix.reshape((3, 3))
-    # einsum subscriptor for N vectors dot N matrices 'ij,ikj->ik'
-    transformed = np.einsum('ij,kj->ik', colors_train, tmatrix)
-    #diff = transformed.flatten() - REF_MATRICES['lab'].flatten()
-    #diff = transformed.flatten() - colors_target
-    #d = np.linalg.norm(diff)
-    d = 0.0
-    d_check = 0.0
-    transformed = transformed[:, 0:3]
-    target = colors_target.reshape((24, 3))
-    #for i in range(24):
-    #    d += color_distance(transformed[i], target[i])
-        #d += delta_e_cie2000(
-        #    LabColor(*transformed[i]), LabColor(*target[i]))
-    d = color_distance_sum(transformed, target)
-    '''for i in range(target.shape[0]):
-        d_check += color_distance(transformed[i], target[i])
-        my_d = color_distance(transformed[i], target[i])
-        color_a = LabColor(transformed[i][0]/100, transformed[i][1], transformed[i][2])
-        color_b = LabColor(target[i][0]/100, target[i][1], target[i][2])
-        color_math_d = delta_e_cie2000(color_a, color_b)
-        print('mine vs color_math', my_d, color_math_d)
-    print('color_distance_sum', d, d_check)'''
-    print('color_distance_sum', d)
-    return d
-    d = 0.0
-    for i in range(target.shape[0]):
-        color_a = LabColor(transformed[i][0]/100, transformed[i][1], transformed[i][2])
-        color_b = LabColor(target[i][0]/100, target[i][1], target[i][2])
-        d += delta_e_cie2000(color_a, color_b)
-    return d
-
-# Use least square to find optimal color transformation matrix
-#color_transform(samples.flatten(), 1, 0, 0, 0, 1, 0, 0, 0, 1)
-ref_colors = np.array([list(ref)[2:5] for ref in REF_POINTS['lab']], dtype=np.float)
-'''ref_colors[:, 0:1] *= 255 / 100
-ref_colors[:, 1:3] += 128
-samples[:, 0:1] *= 255 / 100
-samples[:, 1:3] += 128'''
-
-'''print('ref_colors', ref_colors)
-print('samples', samples)
-ref_colors[:, 0:1] *= 255 / 100 
-ref_colors[:, 0:1] -= 128
-ref_colors[:, :] /= 128
-samples[:, 0:1] *= 255 / 100 
-samples[:, 0:1] -= 128
-samples[:, :] /= 128
-print('ref_colors', ref_colors)
-print('samples', samples)'''
-
-lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
-cv2.imwrite('./images/output.jpg', image)
-cv2.imshow("Image", image)
-cv2.waitKey(0)
-
-def get_color_xform_matrix(samples, ref_colors, initial_matrix, max_nfev=3200):
-    '''
-    Use source color samples and reference color values to optimize 3D
-    transformation matrix for color transformation.
-    '''
-    tmatrix = initial_matrix
-    res_lsq = least_squares(color_transform, tmatrix, args=(
-        samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-        tr_solver='exact', ftol=None, xtol=1e-15, gtol=None, max_nfev=max_nfev,
-        verbose=lsq_verbose)
-    tmatrix = res_lsq.x.reshape(3, 3)
-    return tmatrix
-
-def get_color_polynomial(samples, ref_colors, degree, initial_coeffs, max_nfev=3200):
-    '''
-    Use source color samples and reference color values to optimize polynomial 
-    coefficients for color transformation.
-    '''
-    lsq_verbose = 2
-    D = degree + 1
-    params = coeffs_3d_to_1d(initial_coeffs, degree)
-    res_lsq = least_squares(color_transform_poly, params.ravel(), args=(
-        degree, samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-        tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=max_nfev,
-        verbose=lsq_verbose)
-    coeffs = coeffs_1d_to_3d(res_lsq.x, degree)
-    return coeffs
-
-def poly_extend(coeffs):
-    '''
-    Increase degree of polynomial by 1 and return resized coefficients array.
-    '''
-    variables, D, *_ = coeffs.shape
-    new = np.zeros((variables, D+1, D+1, D+1), dtype=coeffs.dtype)
-    new[:, :D, :D, :D] = coeffs
-    return new
-
-    # Fill axis 3 with zeros of shape (1,)
-    c_ = coeffs.reshape(-1, D)
-    s_ = np.zeros((variables*D**2, 1))
-    coeffs = np.hstack((c_, s_)).reshape(-1, D, D+1)
-
-    # Fill axis 2 with zeros of shape (1, 3)
-    c_ = coeffs.reshape(-1, D, D+1)
-    s_ = np.zeros((variables*D, 1, D+1))
-    coeffs = np.hstack((c_, s_)).reshape(-1, D, D+1, D+1)
-
-    # Fill axis 1 with zeros of shape (1, 3, 3)
-    c_ = coeffs.reshape(-1, D, D+1, D+1)
-    s_ = np.zeros((variables, 1, D+1, D+1))
-    coeffs = np.hstack((c_, s_)).reshape(-1, D+1, D+1, D+1)
-
-    return coeffs
-
-COLOR_XFORM_MATRIX = 0
-COLOR_POLYNOMIAL = 1
-COLOR_CALIB_METHOD = COLOR_POLYNOMIAL
-
-if COLOR_CALIB_METHOD == COLOR_XFORM_MATRIX:
-    initial_matrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
-    tmatrix = get_color_xform_matrix(samples, ref_colors, initial_matrix)
-
+    padding = 0
     image = np.copy(imgp.image)
+    samples = np.ndarray(shape=(24, 3), dtype=np.float)
+    ref_color_index = 0
+    for p in color_patches:
+        image_mask = np.zeros(imgp.image.shape[:2], np.uint8)
+        cv2.fillConvexPoly(image_mask, p, (255,))
+        ''' # Use histogram instead of mean to calculate the XY values
+        hist, xbins, ybins = np.histogram2d(
+            cie_x[r[0]:r[1], r[2]:r[3]].ravel(),
+            cie_y[r[0]:r[1], r[2]:r[3]].ravel(), [256, 256])
+        major = np.unravel_index(np.argmax(hist, axis=None), hist.shape)'''
+
+        if COLOR_SPACE == 'xyz':
+            x = np.average(cie_x[r[0]:r[1], r[2]:r[3]]) / 255
+            y = np.average(cie_y[r[0]:r[1], r[2]:r[3]]) / 255
+        elif COLOR_SPACE == 'lab':
+            color_mean = cv2.mean(lab, image_mask)
+            print('mean', lab.shape, lab[20][20], color_mean)
+            z = color_mean[0] * 100 / 255
+            x = color_mean[1] - 128
+            y = color_mean[2] - 128
+        else:
+            raise ValueError('Unknown color space')
+        cvalues = '%d, %.2f, %.2f' % (z, x, y)
+        samples[ref_color_index] = (z, x, y)
+        print(ref_color_index, (z, x, y), samples[ref_color_index])
+        #nearest, d = nearest_color((z, x, y))
+        index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
+        d = ColorMath.color_distance(ref_color, (z, x, y))
+        #print(x, y, cvalues)
+        #print()
+        # Print color values
+        cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
+        pt1 = tuple((p[0].ravel() + [padding, padding + 16]).astype(np.uint))
+        cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
+            1, (255, 255, 0), 1)
+        # Print ref color
+        pt1 = tuple((p[0].ravel() + [padding, padding + 32]).astype(np.uint))
+        cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
+            1, (255, 255, 0), 1)
+        # Print reference color values
+        ref_values = '%.2f, %.2f' % (ref_color[1], ref_color[2])
+        pt1 = tuple((p[0].ravel() + [padding, padding + 48]).astype(np.uint))
+        cv2.putText(image, ref_values, pt1, cv2.FONT_HERSHEY_PLAIN,
+            1, (255, 255, 0), 1)
+        # Print distance
+        distance = 'd=%.4f' % (d,)
+        pt1 = tuple((p[0].ravel() + [padding, padding + 64]).astype(np.uint))
+        cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
+            1, (255, 255, 0), 1)
+
+        ref_color_index += 1
+
+    # Use least square to find optimal color transformation matrix
+    #color_transform(samples.flatten(), 1, 0, 0, 0, 1, 0, 0, 0, 1)
+    ref_colors = np.array([list(ref)[2:5] for ref in REF_POINTS['lab']], dtype=np.float)
+    '''ref_colors[:, 0:1] *= 255 / 100
+    ref_colors[:, 1:3] += 128
+    samples[:, 0:1] *= 255 / 100
+    samples[:, 1:3] += 128'''
+
+    '''print('ref_colors', ref_colors)
+    print('samples', samples)
+    ref_colors[:, 0:1] *= 255 / 100 
+    ref_colors[:, 0:1] -= 128
+    ref_colors[:, :] /= 128
+    samples[:, 0:1] *= 255 / 100 
+    samples[:, 0:1] -= 128
+    samples[:, :] /= 128
+    print('ref_colors', ref_colors)
+    print('samples', samples)'''
+
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
+    cv2.imshow("Image", image)
+    imgp.output_image_file('source_labeled', image)
+    cv2.waitKey(0)
 
-    lab[:, :, 0] *= 100 / 255
-    lab[:, :, 1:3] -= 128
-    lab = lab.dot(tmatrix.T)
-    lab[:, :, 1:3] += 128
-    lab[:, :, 0] *= 255 / 100
+    COLOR_XFORM_MATRIX = 0
+    COLOR_POLYNOMIAL = 1
+    COLOR_CALIB_METHOD = COLOR_POLYNOMIAL
 
-else:
-    degree = 1
-    D = degree + 1
-    coeffs = np.zeros((3, D, D, D), dtype=np.longdouble)
-    coeffs[0][1][0][0] = 1
-    coeffs[1][0][1][0] = 1
-    coeffs[2][0][0][1] = 1
+    if COLOR_CALIB_METHOD == COLOR_XFORM_MATRIX:
+        initial_matrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
+        tmatrix = ColorMath.get_color_xform_matrix(samples, ref_colors, initial_matrix)
 
-    max_nfev = 3200
-    coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
+        image = np.copy(imgp.image)
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
 
-    for i in range(5):
-        coeffs = poly_extend(coeffs)
-        degree += 1
-        coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
+        lab[:, :, 0] *= 100 / 255
+        lab[:, :, 1:3] -= 128
+        lab = lab.dot(tmatrix.T)
+        lab[:, :, 1:3] += 128
+        lab[:, :, 0] *= 255 / 100
 
-    image = np.copy(imgp.image)
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.longdouble)
-    lab[:, :, 0] *= 100 / 255
-    lab[:, :, 1:3] -= 128
-    transformed = np.copy(lab)
-    for c in range(3):
-        l = lab[:, :, 0]
-        a = lab[:, :, 1]
-        b = lab[:, :, 2]
-        transformed[:, :, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
-    transformed[:, :, 1:3] += 128
-    transformed[:, :, 0] *= 255 / 100
-    lab = transformed
-
-image = cv2.cvtColor(np.rint(lab).astype(np.uint8), cv2.COLOR_LAB2BGR)
-
-ref_color_index = 0
-#image = np.rint(image)
-d_sum = 0
-for p in color_patches:
-    image_mask = np.zeros(image.shape[:2], np.uint8)
-    cv2.fillConvexPoly(image_mask, p, (255,))
-    if COLOR_SPACE == 'xyz':
-        x = np.average(cie_x[r[0]:r[1], r[2]:r[3]]) / 255
-        y = np.average(cie_y[r[0]:r[1], r[2]:r[3]]) / 255
-    elif COLOR_SPACE == 'lab':
-        color_mean = cv2.mean(lab, image_mask)
-        z = color_mean[0] * 100 / 255
-        x = color_mean[1] - 128
-        y = color_mean[2] - 128
     else:
-        raise ValueError('Unknown color space')
-    cvalues = '%d, %.2f, %.2f' % (z, x, y)
-    samples[ref_color_index] = (z, x, y)
-    print(ref_color_index, (z, x, y), samples[ref_color_index])
-    #nearest, d = nearest_color((z, x, y))
-    index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
-    d = color_distance(ref_color, (z, x, y))
-    d_sum += d
-    #print(x, y, cvalues)
-    #print()
-    # Print color values
-    cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
-    pt1 = tuple((p[0].ravel() + [padding, padding + 16]).astype(np.uint))
-    cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
-        1, (255, 255, 0), 1)
-    # Print ref color
-    pt1 = tuple((p[0].ravel() + [padding, padding + 32]).astype(np.uint))
-    cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
-        1, (255, 255, 0), 1)
-    # Print distance
-    distance = 'd=%.4f' % (d,)
-    pt1 = tuple((p[0].ravel() + [padding, padding + 48]).astype(np.uint))
-    cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
-        1, (255, 255, 0), 1)
+        degree = 1
+        D = degree + 1
+        coeffs = np.zeros((3, D, D, D), dtype=np.float)
+        coeffs[0][1][0][0] = 1
+        coeffs[1][0][1][0] = 1
+        coeffs[2][0][0][1] = 1
 
-    ref_color_index += 1
+        max_nfev = 4096
+        coeffs = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
 
-'''img_trans[:, 0:1] *= 255 / 100
-img_trans[:, 1:3] += 128'''
-print('Sum of color distances: {}'.format(d_sum))
-# Transformation matrix, sum of color distances: 249.69263337647757
-# 3 degrees polynomial with 320000 iterations, sum of color distances: 213.58460800749998
-# 3 pass polynomial fit with 3200, 3200, 3200 iterations, sum of color distances: 210.72933187615357
-# Sum of color distances: 152.23432845231142
-cv2.imshow("Image Transformed", image.astype('uint8'))
-cv2.waitKey(0)
+        for i in range(4):
+            coeffs = Polynomial.poly_extend(coeffs)
+            degree += 1
+            coeffs = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
+
+        image = np.copy(imgp.image)
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
+        lab[:, :, 0] *= 100 / 255
+        lab[:, :, 1:3] -= 128
+        transformed = np.copy(lab)
+        for c in range(3):
+            l = lab[:, :, 0]
+            a = lab[:, :, 1]
+            b = lab[:, :, 2]
+            transformed[:, :, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
+        transformed[:, :, 1:3] += 128
+        transformed[:, :, 0] *= 255 / 100
+        lab = transformed
+
+        with open('fit_summary.pkl', 'wb') as fp:
+            fit_summary = {
+                'method': '{} degree polynomial'.format(degree),
+                'coeffs': coeffs,
+            }
+            pickle.dump(fit_summary, fp)
+
+    image = cv2.cvtColor(np.rint(lab).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+    ref_color_index = 0
+    #image = np.rint(image)
+    d_sum = 0
+    for p in color_patches:
+        image_mask = np.zeros(image.shape[:2], np.uint8)
+        cv2.fillConvexPoly(image_mask, p, (255,))
+        if COLOR_SPACE == 'xyz':
+            x = np.average(cie_x[r[0]:r[1], r[2]:r[3]]) / 255
+            y = np.average(cie_y[r[0]:r[1], r[2]:r[3]]) / 255
+        elif COLOR_SPACE == 'lab':
+            color_mean = cv2.mean(lab, image_mask)
+            z = color_mean[0] * 100 / 255
+            x = color_mean[1] - 128
+            y = color_mean[2] - 128
+        else:
+            raise ValueError('Unknown color space')
+        cvalues = '%d, %.2f, %.2f' % (z, x, y)
+        samples[ref_color_index] = (z, x, y)
+        print(ref_color_index, (z, x, y), samples[ref_color_index])
+        #nearest, d = nearest_color((z, x, y))
+        index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
+        d = ColorMath.color_distance(ref_color, (z, x, y))
+        d_sum += d
+        #print(x, y, cvalues)
+        #print()
+        # Print color values
+        cv2.drawContours(image_grids, [p], -1, (0, 255, 0), 2)
+        pt1 = tuple((p[0].ravel() + [padding, padding + 16]).astype(np.uint))
+        cv2.putText(image, cvalues, pt1, cv2.FONT_HERSHEY_PLAIN,
+            1, (255, 255, 0), 1)
+        # Print ref color
+        pt1 = tuple((p[0].ravel() + [padding, padding + 32]).astype(np.uint))
+        cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
+            1, (255, 255, 0), 1)
+        # Print distance
+        distance = 'd=%.4f' % (d,)
+        pt1 = tuple((p[0].ravel() + [padding, padding + 48]).astype(np.uint))
+        cv2.putText(image, distance, pt1, cv2.FONT_HERSHEY_PLAIN,
+            1, (255, 255, 0), 1)
+
+        ref_color_index += 1
+
+    '''img_trans[:, 0:1] *= 255 / 100
+    img_trans[:, 1:3] += 128'''
+    print('Sum of color distances: {}'.format(d_sum))
+    # Transformation matrix, sum of color distances: 249.69263337647757
+    # 3 degrees polynomial with 320000 iterations, sum of color distances: 213.58460800749998
+    # 3 pass polynomial fit with 3200, 3200, 3200 iterations, sum of color distances: 210.72933187615357
+    # Sum of color distances: 152.23432845231142
+    image = image.astype('uint8')
+    cv2.imshow("Image Transformed", image)
+    imgp.output_image_file('calibrated_labeled', image)
+    cv2.waitKey(0)
