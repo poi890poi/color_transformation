@@ -895,7 +895,7 @@ def coeffs_1d_to_3d(params, degree, N=3):
     d = degree
     D = degree + 1
     params = params.reshape(N, -1)
-    coeffs = np.zeros((N, D, D, D), dtype=np.float)
+    coeffs = np.zeros((N, D, D, D), dtype=params.dtype)
     for c in range(N):
         p = 0
         for z in range(D):
@@ -914,7 +914,7 @@ def coeffs_3d_to_1d(coeffs, degree, N=3):
     '''
     d = degree
     D = degree + 1
-    params = np.zeros((N, int(comb(d + N, d))), dtype=np.float)
+    params = np.zeros((N, int(comb(d + N, d))), dtype=coeffs.dtype)
     for c in range(N):
         p = 0
         for z in range(D):
@@ -1032,7 +1032,7 @@ def poly_extend(coeffs):
     Increase degree of polynomial by 1 and return resized coefficients array.
     '''
     variables, D, *_ = coeffs.shape
-    new = np.zeros((variables, D+1, D+1, D+1), dtype=np.float)
+    new = np.zeros((variables, D+1, D+1, D+1), dtype=coeffs.dtype)
     new[:, :D, :D, :D] = coeffs
     return new
 
@@ -1073,7 +1073,7 @@ if COLOR_CALIB_METHOD == COLOR_XFORM_MATRIX:
 else:
     degree = 1
     D = degree + 1
-    coeffs = np.zeros((3, D, D, D), dtype=np.float)
+    coeffs = np.zeros((3, D, D, D), dtype=np.longdouble)
     coeffs[0][1][0][0] = 1
     coeffs[1][0][1][0] = 1
     coeffs[2][0][0][1] = 1
@@ -1081,13 +1081,13 @@ else:
     max_nfev = 3200
     coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
 
-    for i in range(4):
+    for i in range(5):
         coeffs = poly_extend(coeffs)
         degree += 1
         coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
 
-    image = np.copy(imgp.image)#.astype(np.float)
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
+    image = np.copy(imgp.image)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.longdouble)
     lab[:, :, 0] *= 100 / 255
     lab[:, :, 1:3] -= 128
     transformed = np.copy(lab)
