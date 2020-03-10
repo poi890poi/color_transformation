@@ -21,9 +21,9 @@ from colormath.color_diff import delta_e_cie2000
 
 
 PATH_IN = './images/20200213_103455.jpg'
-#PATH_IN = './images/20200213_103542.jpg' # noise rectangles
+PATH_IN = './images/20200213_103542.jpg' # noise rectangles
 PATH_IN = './images/color_checker.jpg'
-#PATH_IN = './images/20200220_120829.jpg' # yellowish
+PATH_IN = './images/20200220_120829.jpg' # yellowish
 PATH_IN = './images/20200220_120820.jpg' # blueish
 #PATH_IN = './images/20200303_114801.jpg'
 #PATH_IN = './images/20200303_114806.jpg'
@@ -1059,6 +1059,8 @@ if __name__ == "__main__":
 
         ref_color_index += 1
 
+    source_samples = np.copy(samples)
+
     # Use least square to find optimal color transformation matrix
     #color_transform(samples.flatten(), 1, 0, 0, 0, 1, 0, 0, 0, 1)
     ref_colors = np.array([list(ref)[2:5] for ref in REF_POINTS['lab']], dtype=np.float)
@@ -1111,7 +1113,7 @@ if __name__ == "__main__":
         max_nfev = 4096
         coeffs = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
 
-        for i in range(4):
+        for i in range(5):
             coeffs = Polynomial.poly_extend(coeffs)
             degree += 1
             coeffs = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
@@ -1129,15 +1131,10 @@ if __name__ == "__main__":
         transformed[:, :, 1:3] += 128
         transformed[:, :, 0] *= 255 / 100
         lab = transformed
+        lab = np.clip(lab, 0, 255)
+        lab = np.rint(lab).astype(np.uint8)
 
-        with open('fit_summary.pkl', 'wb') as fp:
-            fit_summary = {
-                'method': '{} degree polynomial'.format(degree),
-                'coeffs': coeffs,
-            }
-            pickle.dump(fit_summary, fp)
-
-    image = cv2.cvtColor(np.rint(lab).astype(np.uint8), cv2.COLOR_LAB2BGR)
+    image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
     ref_color_index = 0
     #image = np.rint(image)
@@ -1180,6 +1177,16 @@ if __name__ == "__main__":
             1, (255, 255, 0), 1)
 
         ref_color_index += 1
+
+    with open('fit_summary.pkl', 'wb') as fp:
+        fit_summary = {
+            'method': '{} degree polynomial'.format(degree),
+            'distance_sum': d_sum,
+            'coeffs': coeffs,
+            'source_samples': source_samples,
+            'calib_samples': samples,
+        }
+        pickle.dump(fit_summary, fp)
 
     '''img_trans[:, 0:1] *= 255 / 100
     img_trans[:, 1:3] += 128'''
