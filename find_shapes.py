@@ -1022,7 +1022,7 @@ def get_color_polynomial(samples, ref_colors, degree, initial_coeffs, max_nfev=3
     params = coeffs_3d_to_1d(initial_coeffs, degree)
     res_lsq = least_squares(color_transform_poly, params.ravel(), args=(
         degree, samples.flatten(), ref_colors.flatten()), jac='3-point', loss='soft_l1',
-        tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=3200,
+        tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=max_nfev,
         verbose=lsq_verbose)
     coeffs = coeffs_1d_to_3d(res_lsq.x, degree)
     return coeffs
@@ -1081,15 +1081,10 @@ else:
     max_nfev = 3200
     coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
 
-    coeffs = poly_extend(coeffs)
-    degree += 1
-    max_nfev *= 2
-    coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
-
-    coeffs = poly_extend(coeffs)
-    degree += 1
-    max_nfev *= 2
-    coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
+    for i in range(4):
+        coeffs = poly_extend(coeffs)
+        degree += 1
+        coeffs = get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
 
     image = np.copy(imgp.image)#.astype(np.float)
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
@@ -1155,5 +1150,6 @@ print('Sum of color distances: {}'.format(d_sum))
 # Transformation matrix, sum of color distances: 249.69263337647757
 # 3 degrees polynomial with 320000 iterations, sum of color distances: 213.58460800749998
 # 3 pass polynomial fit with 3200, 3200, 3200 iterations, sum of color distances: 210.72933187615357
+# Sum of color distances: 152.23432845231142
 cv2.imshow("Image Transformed", image.astype('uint8'))
 cv2.waitKey(0)
