@@ -3,7 +3,9 @@ import argparse
 import math
 import operator
 import pickle
+import json
 import time
+import os
 from pprint import pprint
 
 import numpy as np
@@ -67,15 +69,40 @@ REF_POINTS = {
 parser = argparse.ArgumentParser(description='Auto color correction.')
 parser.add_argument('--debug', action='store_true',
                     help='Display images for debug.')
+parser.add_argument('--headless', action='store_true',
+                    help='Run silently in the background.')
+parser.add_argument('--filename', type=str,
+                    help='Filename of the image to perform the task.')
+parser.add_argument('--prefix', type=str, default='output',
+                    help='Directory name to output the result of this color calibration task.')
 parser.add_argument('--test', action='store_true',
                     help='Run with less iterations for testing.')
+parser.add_argument('--max_nfev', type=int, default=4096,
+                    help='Max iterations for least squares optimization.')
+parser.add_argument('--poly_degree', type=int, default=4,
+                    help='Degree of polynomial function for color transformation.')
+parser.add_argument('--method', type=str, default='poly',
+                    help='Max iterations for least squares optimization.')
 args = parser.parse_args()
 DEBUG = args.debug
+HEADLESS = args.headless
 TEST = args.test
 lsq_verbose = 1
 if DEBUG:
     lsq_verbose = 2
 
+COLOR_XFORM_MATRIX = 0
+COLOR_POLYNOMIAL = 1
+COLOR_CALIB_METHOD = COLOR_POLYNOMIAL
+if args.method != 'poly':
+    COLOR_CALIB_METHOD = COLOR_XFORM_MATRIX
+MAX_NFEV = args.max_nfev
+POLY_DEGREE = args.poly_degree
+PATH_IN = './images/{}'.format(args.filename)
+PREFIX = args.prefix
+p_ = './images/{}'.format(PREFIX)
+if not os.path.isdir(p_):
+    os.mkdir(p_)
 
 class ImageProcessing:
     
@@ -142,23 +169,25 @@ class ImageProcessing:
         self.__length_factor = 1 / resized_width
         self.__area_factor = self.__length_factor ** 2
         self.__img_resized = resized
-        cv2.imshow('Source', resized)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        if not HEADLESS:
+            cv2.imshow('Source', resized)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
     @classmethod
     def display(cls, caption, image):
-        cv2.imshow(caption, image)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        if not HEADLESS:
+            cv2.imshow(caption, image)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
     def output_image_file(self, name, image):
         try:
             self.__step_output += 1
         except AttributeError:
             self.__step_output = 1
-        cv2.imwrite('./images/output/{:02d}_{}.jpg'.format(
-            self.__step_output, name), image)
+        cv2.imwrite('./images/{}/{:02d}_{}.png'.format(
+            PREFIX, self.__step_output, name), image)
 
     def render_contours(self, image, contours):
         for c in contours:
@@ -854,7 +883,6 @@ class ColorMath:
             color_math_d = delta_e_cie2000(color_a, color_b)
             print('mine vs color_math', my_d, color_math_d)
         print('color_distance_sum', d, d_check)'''
-        print('color_distance_sum', d)
         return d
         d = 0.0
         for i in range(target.shape[0]):
@@ -875,7 +903,7 @@ class ColorMath:
             tr_solver='exact', ftol=None, xtol=1e-15, gtol=None, max_nfev=max_nfev,
             verbose=lsq_verbose)
         tmatrix = res_lsq.x.reshape(3, 3)
-        return tmatrix
+        return tmatrix, res_lsq
 
     @classmethod
     def get_color_polynomial(cls, samples, ref_colors, degree, initial_coeffs, max_nfev=3200):
@@ -995,7 +1023,6 @@ if __name__ == "__main__":
         cv2.waitKey(0)
         cv2.imshow("Mask", image_mask)
         cv2.waitKey(0)
-    imgp.output_image_file('grids', image_grids)
     imgp.output_image_file('mask', image_mask)
 
     # Convert to target color space
@@ -1085,26 +1112,31 @@ if __name__ == "__main__":
     print('samples', samples)'''
 
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
-    cv2.imshow("Image", image)
     imgp.output_image_file('source_labeled', image)
-    cv2.waitKey(0)
-
-    COLOR_XFORM_MATRIX = 0
-    COLOR_POLYNOMIAL = 1
-    COLOR_CALIB_METHOD = COLOR_POLYNOMIAL
+    if not HEADLESS:
+        cv2.imshow("Image", image)
+        cv2.waitKey(0)
 
     if COLOR_CALIB_METHOD == COLOR_XFORM_MATRIX:
         initial_matrix = np.array((1, 0, 0, 0, 1, 0, 0, 0, 1), dtype=np.float)
-        tmatrix = ColorMath.get_color_xform_matrix(samples, ref_colors, initial_matrix)
+        fit_iterations = list()
+        t_ = time.perf_counter()
+        tmatrix, res_lsq = ColorMath.get_color_xform_matrix(samples, ref_colors, initial_matrix)
+        time_fit = time.perf_counter() - t_
+        fit_iterations.append(res_lsq.nfev)
 
         image = np.copy(imgp.image)
         lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
 
         lab[:, :, 0] *= 100 / 255
         lab[:, :, 1:3] -= 128
+        t_ = time.perf_counter()
         lab = lab.dot(tmatrix.T)
+        time_transform = time.perf_counter() - t_
         lab[:, :, 1:3] += 128
         lab[:, :, 0] *= 255 / 100
+
+        coeffs = np.array([])
 
     else:
         degree = 1
@@ -1118,11 +1150,11 @@ if __name__ == "__main__":
         if TEST:
             max_nfev = 4
         else:
-            max_nfev = 4096
+            max_nfev = MAX_NFEV
         fit_iterations = list()
         coeffs, res_lsq = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
         fit_iterations.append(res_lsq.nfev)
-        for i in range(5):
+        for i in range(POLY_DEGREE - 1):
             coeffs = Polynomial.poly_extend(coeffs)
             degree += 1
             coeffs, res_lsq = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
@@ -1144,8 +1176,9 @@ if __name__ == "__main__":
         transformed[:, :, 1:3] += 128
         transformed[:, :, 0] *= 255 / 100
         lab = transformed
-        lab = np.clip(lab, 0, 255)
-        lab = np.rint(lab).astype(np.uint8)
+
+    lab = np.clip(lab, 0, 255)
+    lab = np.rint(lab).astype(np.uint8)
 
     image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
@@ -1193,27 +1226,33 @@ if __name__ == "__main__":
         
     color_distances = np.array(color_distances)
 
-    with open('./images/output/fit_summary.pkl', 'wb') as fp:
-        fit_summary = {
-            'method': '{} degree polynomial'.format(degree),
-            'fit_max_nfev': fit_iterations,
-            'image_dimension': image.shape,
-            'color_distances': color_distances,
-            'distance_sum': np.sum(color_distances),
-            'distance_max': np.max(color_distances),
-            'coeffs': coeffs,
-            'num_coeffs': coeffs.size,
-            'time_fit': time_fit,
-            'time_transform': time_transform,
-            'source_samples': source_samples,
-            'calib_samples': samples,
-        }
+    if COLOR_CALIB_METHOD == COLOR_XFORM_MATRIX:
+        method = 'projective_transformation'
+    else:
+        method = '{} degree polynomial'.format(degree)
+    fit_summary = {
+        'method': method,
+        'fit_max_nfev': fit_iterations,
+        'image_dimension': image.shape,
+        'color_distances': color_distances,
+        'distance_sum': np.sum(color_distances),
+        'distance_max': np.max(color_distances),
+        'coeffs': coeffs,
+        'num_coeffs': coeffs.size,
+        'time_fit': time_fit,
+        'time_transform': time_transform,
+        'source_samples': source_samples,
+        'calib_samples': samples,
+    }
+    with open('./images/{}/fit_summary.pkl'.format(PREFIX), 'wb') as fp:
         pickle.dump(fit_summary, fp)
+    with open('./images/{}/fit_summary.json'.format(PREFIX), 'w') as fp:
         fit_summary.pop('coeffs', None)
         fit_summary.pop('source_samples', None)
         fit_summary.pop('calib_samples', None)
         fit_summary.pop('color_distances', None)
         pprint(fit_summary)
+        json.dump(fit_summary, fp, indent=4)
 
     '''img_trans[:, 0:1] *= 255 / 100
     img_trans[:, 1:3] += 128'''
@@ -1222,6 +1261,59 @@ if __name__ == "__main__":
     # 3 pass polynomial fit with 3200, 3200, 3200 iterations, sum of color distances: 210.72933187615357
     # Sum of color distances: 152.23432845231142
     image = image.astype('uint8')
-    cv2.imshow("Image Transformed", image)
     imgp.output_image_file('calibrated_labeled', image)
-    cv2.waitKey(0)
+    if not HEADLESS:
+        cv2.imshow("Image Transformed", image)
+        cv2.waitKey(0)
+
+    # Render color chart
+    lab = np.zeros((600, 600, 3), dtype=np.float)
+    l = 128
+    for y in range(600):
+        for x in range(600):
+            a = x / 600 * 256
+            b = 256 - (y / 600 * 256)
+            lab[y, x, 0] = l
+            lab[y, x, 1] = a
+            lab[y, x, 2] = b
+
+    with open('./images/{}/fit_summary.pkl'.format(PREFIX), 'rb') as fp:
+        fit_summary = pickle.load(fp)
+
+    coeffs = fit_summary['coeffs']
+
+    image = cv2.cvtColor(lab.astype('uint8'), cv2.COLOR_LAB2BGR)
+    for c in REF_POINTS['lab'][:19]:
+        i, name, l, a, b = c
+        a += 128
+        b += 128
+        x = int(a / 256 * 600)
+        y = int((256 - b) / 256 * 600)
+        pt0 = (x, y)
+
+        l, a, b = fit_summary['source_samples'][i - 1]
+        a += 128
+        b += 128
+        x = int(a / 256 * 600)
+        y = int((256 - b) / 256 * 600)
+        pt1 = (x, y)
+
+        l, a, b = fit_summary['calib_samples'][i - 1]
+        a += 128
+        b += 128
+        x = int(a / 256 * 600)
+        y = int((256 - b) / 256 * 600)
+        pt2 = (x, y)
+
+        cv2.circle(image, pt1, 4, (255, 255, 0), 1)
+        cv2.arrowedLine(image, pt1, pt2, (255, 255, 0), 1, tipLength=0.1)
+        cv2.arrowedLine(image, pt2, pt0, (0, 0, 255), 1, tipLength=0.1)
+
+        pt1 = tuple(((np.array(pt1) + np.array(pt2)) / 2).astype(np.uint))
+        #cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
+        #    1, (255, 255, 0), 1)
+
+    cv2.imwrite('./images/{}/color_chart.png'.format(PREFIX), image)
+    if not HEADLESS:
+        cv2.imshow("Color Space", image)
+        cv2.waitKey(0)

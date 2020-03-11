@@ -16,25 +16,11 @@ for y in range(600):
         lab[y, x, 1] = a
         lab[y, x, 2] = b
 
-with open('fit_summary.pkl', 'rb') as fp:
+with open('./images/output/fit_summary.pkl', 'rb') as fp:
     fit_summary = pickle.load(fp)
     print(fit_summary)
 
 coeffs = fit_summary['coeffs']
-'''print(fit_summary['source_samples'])
-print(fit_summary['calib_samples'])
-transformed = np.copy(np.array(REF_POINTS['lab'])[:, 2:5]).astype(np.float)
-print(transformed[:, 1:3].astype(np.int))
-for c in range(3):
-    l = transformed[:, 0]
-    a = transformed[:, 1]
-    b = transformed[:, 2]
-    transformed[:, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
-transformed[:, 1:3] += 128
-transformed[:, 0] *= 255 / 100
-print(transformed[:, 1:3].astype(np.int))
-transformed = np.clip(transformed, 0, 255)
-raise'''
 
 image = cv2.cvtColor(lab.astype('uint8'), cv2.COLOR_LAB2BGR)
 for c in REF_POINTS['lab'][:19]:
