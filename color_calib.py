@@ -100,7 +100,7 @@ MAX_NFEV = args.max_nfev
 POLY_DEGREE = args.poly_degree
 PATH_IN = './images/{}'.format(args.filename)
 PREFIX = args.prefix
-p_ = './images/{}'.format(PREFIX)
+p_ = './images/output/{}'.format(PREFIX)
 if not os.path.isdir(p_):
     os.mkdir(p_)
 
@@ -186,7 +186,7 @@ class ImageProcessing:
             self.__step_output += 1
         except AttributeError:
             self.__step_output = 1
-        cv2.imwrite('./images/{}/{:02d}_{}.png'.format(
+        cv2.imwrite('./images/output/{}/{:02d}_{}.png'.format(
             PREFIX, self.__step_output, name), image)
 
     def render_contours(self, image, contours):
@@ -1040,6 +1040,7 @@ if __name__ == "__main__":
     image = np.copy(imgp.image)
     samples = np.ndarray(shape=(24, 3), dtype=np.float)
     ref_color_index = 0
+    color_distances_source = list()
     for p in color_patches:
         image_mask = np.zeros(imgp.image.shape[:2], np.uint8)
         cv2.fillConvexPoly(image_mask, p, (255,))
@@ -1066,6 +1067,7 @@ if __name__ == "__main__":
         #nearest, d = nearest_color((z, x, y))
         index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
         d = ColorMath.color_distance(ref_color, (z, x, y))
+        color_distances_source.append(d)
         #print(x, y, cvalues)
         #print()
         # Print color values
@@ -1090,6 +1092,7 @@ if __name__ == "__main__":
 
         ref_color_index += 1
 
+    color_distances_source = np.array(color_distances_source)
     source_samples = np.copy(samples)
 
     # Use least square to find optimal color transformation matrix
@@ -1186,7 +1189,7 @@ if __name__ == "__main__":
 
     ref_color_index = 0
     #image = np.rint(image)
-    color_distances = list()
+    color_distances_calib = list()
     for p in color_patches:
         image_mask = np.zeros(image.shape[:2], np.uint8)
         cv2.fillConvexPoly(image_mask, p, (255,))
@@ -1206,7 +1209,7 @@ if __name__ == "__main__":
         #nearest, d = nearest_color((z, x, y))
         index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
         d = ColorMath.color_distance(ref_color, (z, x, y))
-        color_distances.append(d)
+        color_distances_calib.append(d)
         #print(x, y, cvalues)
         #print()
         # Print color values
@@ -1226,7 +1229,7 @@ if __name__ == "__main__":
 
         ref_color_index += 1
         
-    color_distances = np.array(color_distances)
+    color_distances_calib = np.array(color_distances_calib)
 
     if COLOR_CALIB_METHOD == COLOR_XFORM_MATRIX:
         method = 'projective_transformation'
@@ -1236,9 +1239,12 @@ if __name__ == "__main__":
         'method': method,
         'fit_max_nfev': fit_iterations,
         'image_dimension': image.shape,
-        'color_distances': color_distances,
-        'distance_sum': np.sum(color_distances),
-        'distance_max': np.max(color_distances),
+        'color_distances_source': color_distances_source,
+        'color_distances_calib': color_distances_calib,
+        'distance_sum_source': np.sum(color_distances_source),
+        'distance_max_source': np.max(color_distances_source),
+        'distance_sum_calibrated': np.sum(color_distances_calib),
+        'distance_max_calibrated': np.max(color_distances_calib),
         'coeffs': coeffs,
         'num_coeffs': n_coeffs,
         'time_fit': time_fit,
@@ -1247,13 +1253,14 @@ if __name__ == "__main__":
         'calib_samples': samples,
     }
 
-    with open('./images/{}/fit_summary.pkl'.format(PREFIX), 'wb') as fp:
+    with open('./images/output/{}/fit_summary.pkl'.format(PREFIX), 'wb') as fp:
         pickle.dump(fit_summary, fp)
-    with open('./images/{}/fit_summary.json'.format(PREFIX), 'w') as fp:
+    with open('./images/output/{}/fit_summary.json'.format(PREFIX), 'w') as fp:
         fit_summary.pop('coeffs', None)
         fit_summary.pop('source_samples', None)
         fit_summary.pop('calib_samples', None)
-        fit_summary.pop('color_distances', None)
+        fit_summary.pop('color_distances_source', None)
+        fit_summary.pop('color_distances_calib', None)
         pprint(fit_summary)
         json.dump(fit_summary, fp, indent=4)
 
@@ -1280,7 +1287,7 @@ if __name__ == "__main__":
             lab[y, x, 1] = a
             lab[y, x, 2] = b
 
-    with open('./images/{}/fit_summary.pkl'.format(PREFIX), 'rb') as fp:
+    with open('./images/output/{}/fit_summary.pkl'.format(PREFIX), 'rb') as fp:
         fit_summary = pickle.load(fp)
 
     coeffs = fit_summary['coeffs']
@@ -1316,7 +1323,7 @@ if __name__ == "__main__":
         #cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
         #    1, (255, 255, 0), 1)
 
-    cv2.imwrite('./images/{}/color_chart.png'.format(PREFIX), image)
+    cv2.imwrite('./images/output/{}/color_chart.png'.format(PREFIX), image)
     if not HEADLESS:
         cv2.imshow("Color Space", image)
         cv2.waitKey(0)
