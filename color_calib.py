@@ -1136,7 +1136,8 @@ if __name__ == "__main__":
         lab[:, :, 1:3] += 128
         lab[:, :, 0] *= 255 / 100
 
-        coeffs = np.array([])
+        coeffs = None
+        n_coeffs = None
 
     else:
         degree = 1
@@ -1159,6 +1160,7 @@ if __name__ == "__main__":
             degree += 1
             coeffs, res_lsq = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
             fit_iterations.append(res_lsq.nfev)
+        n_coeffs = len(res_lsq.x)
         time_fit = time.perf_counter() - t_
 
         image = np.copy(imgp.image)
@@ -1238,12 +1240,13 @@ if __name__ == "__main__":
         'distance_sum': np.sum(color_distances),
         'distance_max': np.max(color_distances),
         'coeffs': coeffs,
-        'num_coeffs': coeffs.size,
+        'num_coeffs': n_coeffs,
         'time_fit': time_fit,
         'time_transform': time_transform,
         'source_samples': source_samples,
         'calib_samples': samples,
     }
+
     with open('./images/{}/fit_summary.pkl'.format(PREFIX), 'wb') as fp:
         pickle.dump(fit_summary, fp)
     with open('./images/{}/fit_summary.json'.format(PREFIX), 'w') as fp:
