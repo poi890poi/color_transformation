@@ -3,6 +3,7 @@ import argparse
 import math
 import operator
 import pickle
+import time
 from pprint import pprint
 
 import numpy as np
@@ -24,7 +25,7 @@ PATH_IN = './images/20200213_103455.jpg'
 PATH_IN = './images/20200213_103542.jpg' # noise rectangles
 PATH_IN = './images/color_checker.jpg'
 PATH_IN = './images/20200220_120829.jpg' # yellowish
-PATH_IN = './images/20200220_120820.jpg' # blueish
+#PATH_IN = './images/20200220_120820.jpg' # blueish
 #PATH_IN = './images/20200303_114801.jpg'
 #PATH_IN = './images/20200303_114806.jpg'
 #PATH_IN = './images/20200303_114812.jpg' # poor
@@ -66,8 +67,11 @@ REF_POINTS = {
 parser = argparse.ArgumentParser(description='Auto color correction.')
 parser.add_argument('--debug', action='store_true',
                     help='Display images for debug.')
+parser.add_argument('--test', action='store_true',
+                    help='Run with less iterations for testing.')
 args = parser.parse_args()
 DEBUG = args.debug
+TEST = args.test
 lsq_verbose = 1
 if DEBUG:
     lsq_verbose = 2
@@ -887,7 +891,7 @@ class ColorMath:
             tr_solver='exact', ftol=1e-15, xtol=None, gtol=None, max_nfev=max_nfev,
             verbose=lsq_verbose)
         coeffs = Polynomial.coeffs_1d_to_3d(res_lsq.x, degree)
-        return coeffs
+        return coeffs, res_lsq
 
 
 class Polynomial:
@@ -1110,13 +1114,20 @@ if __name__ == "__main__":
         coeffs[1][0][1][0] = 1
         coeffs[2][0][0][1] = 1
 
-        max_nfev = 4096
-        coeffs = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
-
+        t_ = time.perf_counter()
+        if TEST:
+            max_nfev = 4
+        else:
+            max_nfev = 4096
+        fit_iterations = list()
+        coeffs, res_lsq = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
+        fit_iterations.append(res_lsq.nfev)
         for i in range(5):
             coeffs = Polynomial.poly_extend(coeffs)
             degree += 1
-            coeffs = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
+            coeffs, res_lsq = ColorMath.get_color_polynomial(samples, ref_colors, degree, coeffs, max_nfev)
+            fit_iterations.append(res_lsq.nfev)
+        time_fit = time.perf_counter() - t_
 
         image = np.copy(imgp.image)
         lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float)
@@ -1127,7 +1138,9 @@ if __name__ == "__main__":
             l = lab[:, :, 0]
             a = lab[:, :, 1]
             b = lab[:, :, 2]
+            t_ = time.perf_counter()
             transformed[:, :, c] = np.polynomial.polynomial.polyval3d(l, a, b, coeffs[c])
+            time_transform = time.perf_counter() - t_
         transformed[:, :, 1:3] += 128
         transformed[:, :, 0] *= 255 / 100
         lab = transformed
@@ -1138,7 +1151,7 @@ if __name__ == "__main__":
 
     ref_color_index = 0
     #image = np.rint(image)
-    d_sum = 0
+    color_distances = list()
     for p in color_patches:
         image_mask = np.zeros(image.shape[:2], np.uint8)
         cv2.fillConvexPoly(image_mask, p, (255,))
@@ -1158,7 +1171,7 @@ if __name__ == "__main__":
         #nearest, d = nearest_color((z, x, y))
         index, name, *ref_color = REF_POINTS['lab'][ref_color_index]
         d = ColorMath.color_distance(ref_color, (z, x, y))
-        d_sum += d
+        color_distances.append(d)
         #print(x, y, cvalues)
         #print()
         # Print color values
@@ -1177,20 +1190,33 @@ if __name__ == "__main__":
             1, (255, 255, 0), 1)
 
         ref_color_index += 1
+        
+    color_distances = np.array(color_distances)
 
-    with open('fit_summary.pkl', 'wb') as fp:
+    with open('./images/output/fit_summary.pkl', 'wb') as fp:
         fit_summary = {
             'method': '{} degree polynomial'.format(degree),
-            'distance_sum': d_sum,
+            'fit_max_nfev': fit_iterations,
+            'image_dimension': image.shape,
+            'color_distances': color_distances,
+            'distance_sum': np.sum(color_distances),
+            'distance_max': np.max(color_distances),
             'coeffs': coeffs,
+            'num_coeffs': coeffs.size,
+            'time_fit': time_fit,
+            'time_transform': time_transform,
             'source_samples': source_samples,
             'calib_samples': samples,
         }
         pickle.dump(fit_summary, fp)
+        fit_summary.pop('coeffs', None)
+        fit_summary.pop('source_samples', None)
+        fit_summary.pop('calib_samples', None)
+        fit_summary.pop('color_distances', None)
+        pprint(fit_summary)
 
     '''img_trans[:, 0:1] *= 255 / 100
     img_trans[:, 1:3] += 128'''
-    print('Sum of color distances: {}'.format(d_sum))
     # Transformation matrix, sum of color distances: 249.69263337647757
     # 3 degrees polynomial with 320000 iterations, sum of color distances: 213.58460800749998
     # 3 pass polynomial fit with 3200, 3200, 3200 iterations, sum of color distances: 210.72933187615357

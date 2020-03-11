@@ -37,7 +37,7 @@ transformed = np.clip(transformed, 0, 255)
 raise'''
 
 image = cv2.cvtColor(lab.astype('uint8'), cv2.COLOR_LAB2BGR)
-for c in REF_POINTS['lab'][:18]:
+for c in REF_POINTS['lab'][:19]:
     i, name, l, a, b = c
     a += 128
     b += 128
@@ -64,11 +64,12 @@ for c in REF_POINTS['lab'][:18]:
 
     cv2.circle(image, pt1, 4, (255, 255, 0), 1)
     cv2.arrowedLine(image, pt1, pt2, (255, 255, 0), 1, tipLength=0.1)
-    cv2.arrowedLine(image, pt2, pt0, (0, 0, 0), 1, tipLength=0.1)
+    cv2.arrowedLine(image, pt2, pt0, (0, 0, 255), 1, tipLength=0.1)
 
     pt1 = tuple(((np.array(pt1) + np.array(pt2)) / 2).astype(np.uint))
     #cv2.putText(image, name, pt1, cv2.FONT_HERSHEY_PLAIN,
     #    1, (255, 255, 0), 1)
 
 cv2.imshow("Color Space", image)
+cv2.imwrite('./images/output/color_chart.jpg', image)
 cv2.waitKey(0)
